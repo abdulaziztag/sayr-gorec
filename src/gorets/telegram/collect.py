@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from telethon.errors import FloodWaitError
 from telethon.tl import types as tl
@@ -209,6 +210,12 @@ async def harvest(
     return result
 
 
+def initial_since_utc(settings: Settings) -> datetime:
+    """Полночь даты первого сбора по местному времени, в UTC для Telegram."""
+    local = datetime.combine(settings.initial_since, datetime.min.time())
+    return local.replace(tzinfo=ZoneInfo(settings.timezone)).astimezone(UTC)
+
+
 async def run_collect(settings: Settings, repo: Repository, client: Any) -> CollectReport:
     """Ежедневный прогон: новые сообщения по каждому чату, затем чистка по сроку."""
     report = CollectReport()
@@ -224,7 +231,13 @@ async def run_collect(settings: Settings, repo: Repository, client: Any) -> Coll
             topics = TopicResolver(client, entity, chat.is_forum)
             await topics.load_all()
             since_id = repo.last_msg_id(chat.chat_id)
-            log.info("Чат %s: читаем сообщения с id > %s", ref, since_id)
+            # Новый чат (в базе ещё ничего нет) сканируем сразу с заданной даты,
+            # а не со всей истории; прерванное сканирование продолжится по id.
+            offset_date = None if since_id else initial_since_utc(settings)
+            if offset_date is not None:
+                log.info("Чат %s: первый сбор, читаем с %s", ref, settings.initial_since)
+            else:
+                log.info("Чат %s: читаем сообщения с id > %s", ref, since_id)
             result = await harvest(
                 client,
                 repo,
@@ -233,6 +246,7 @@ async def run_collect(settings: Settings, repo: Repository, client: Any) -> Coll
                 chat,
                 topics,
                 min_id=since_id,
+                offset_date=offset_date,
                 on_progress=lambda last, new, rid=run_id: repo.update_run(
                     rid, new_messages=new, last_msg_id=last
                 ),

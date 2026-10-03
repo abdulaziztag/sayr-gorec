@@ -31,6 +31,7 @@ def settings(**overrides) -> Settings:
     base = {
         "author_hmac_secret": "secret",
         "chats": "gorets_uzb",
+        "initial_since": "2020-01-01",
         "request_pause": 0,
         "upsert_batch": 2,
         "retention_days": 90,
@@ -64,6 +65,45 @@ def test_collect_stores_new_messages_and_is_idempotent(repo: Repository) -> None
     assert runs[0].kind == "collect" and runs[0].status == "ok"
     assert runs[0].details["seen"] == 0
     assert repo.resolve_chat_id("gorets_uzb") == CHAT_ID
+
+
+def test_new_chat_is_scanned_from_initial_date_only(repo: Repository) -> None:
+    from datetime import date
+
+    client = FakeTelegramClient(
+        [msg(1, days_ago=400), msg(2, days_ago=20), msg(3, days_ago=1)], forum=False
+    )
+    cutoff = (datetime.now(UTC) - timedelta(days=30)).date()
+    report = asyncio.run(
+        run_collect(settings(initial_since=cutoff, retention_days=3650), repo, client)
+    )
+    assert report.new_total == 2
+    assert repo.last_msg_id(CHAT_ID) == 3
+    with repo.session() as s:
+        from gorets.models import Message
+
+        assert s.get(Message, (CHAT_ID, 1)) is None
+        assert s.get(Message, (CHAT_ID, 2)).topic_id is None  # канал без веток
+    # Чат уже в базе: дата больше не используется, читаем по id.
+    client.messages.append(msg(4, days_ago=0))
+    report = asyncio.run(
+        run_collect(settings(initial_since=date(2030, 1, 1), retention_days=3650), repo, client)
+    )
+    assert report.new_total == 1
+
+
+def test_interrupted_initial_scan_resumes_by_id(repo: Repository) -> None:
+    client = FakeTelegramClient(
+        [msg(i, days_ago=10) for i in range(1, 6)], forum=False, flood_at=4, flood_seconds=99999
+    )
+    cutoff = (datetime.now(UTC) - timedelta(days=30)).date()
+    with pytest.raises(CollectError):
+        asyncio.run(run_collect(settings(initial_since=cutoff), repo, client))
+    # До FloodWait успели прочитать три сообщения, они сохранены.
+    assert repo.count_messages(CHAT_ID) == 3
+    report = asyncio.run(run_collect(settings(initial_since=cutoff), repo, client))
+    assert report.new_total == 2
+    assert repo.count_messages(CHAT_ID) == 5
 
 
 def test_collect_continues_after_new_messages_appear(repo: Repository) -> None:

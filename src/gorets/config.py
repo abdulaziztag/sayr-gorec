@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from pydantic import Field
@@ -30,8 +31,11 @@ class Settings(BaseSettings):
     tg_api_hash: str | None = None
     # Строка сессии Telethon. Получается командой `gorets login`.
     tg_session: str | None = None
-    # Чаты для сбора через запятую: username или числовой id.
-    chats: str = "gorets_uzb"
+    # Чаты для сбора через запятую: username или числовой id. Чат, которого ещё
+    # нет в базе, при первом сборе читается с даты `initial_since`.
+    chats: str = "gorets_uzb,gornyazhka"
+    # С какой даты (по Ташкенту) читать новый чат при первом сборе.
+    initial_since: date = date(2026, 1, 1)
     # Кому слать отчёт: @username или числовой id владельца.
     owner: str | None = None
     # Пауза между запросами к Telegram, секунды.
