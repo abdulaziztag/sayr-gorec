@@ -62,6 +62,10 @@ class Repository:
         with self.session() as s, s.begin():
             s.execute(stmt)
 
+    def list_chats(self) -> list[Chat]:
+        with self.session() as s:
+            return list(s.execute(select(Chat).order_by(Chat.chat_id)).scalars())
+
     def resolve_chat_id(self, chat: str) -> int | None:
         """Числовой id чата по username или строке с числом (поддерживается форма -100…)."""
         stripped = chat.strip().lstrip("@")
