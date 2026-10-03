@@ -72,6 +72,23 @@ def resolve_owner(owner: str | int) -> str | int:
     return value
 
 
+async def resolve_target(client: Any, owner: str | int) -> Any:
+    """Сущность владельца для отправки.
+
+    Строка сессии не хранит кэш сущностей, поэтому числовой id в свежем
+    процессе неизвестен клиенту; список диалогов его подгружает — владелец
+    уже писал аккаунту-сборщику, значит, диалог есть.
+    """
+    target = resolve_owner(owner)
+    try:
+        return await client.get_input_entity(target)
+    except ValueError:
+        if not hasattr(client, "get_dialogs"):
+            raise
+        await client.get_dialogs(limit=200)
+        return await client.get_input_entity(target)
+
+
 async def send_report(
     client: Any,
     owner: str | int,
@@ -87,7 +104,7 @@ async def send_report(
     `auto`: частями, если их не больше `max_parts`, иначе — файлом с коротким
     сопроводительным сообщением (первая часть текста).
     """
-    target = resolve_owner(owner)
+    target = await resolve_target(client, owner)
     parts = split_message(text, limit)
     use_file = mode == "file" or (mode == "auto" and len(parts) > max_parts)
     if use_file and file_path is not None:

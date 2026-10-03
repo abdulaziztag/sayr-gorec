@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -253,7 +252,6 @@ async def run_collect(settings: Settings, repo: Repository, client: Any) -> Coll
             log.exception("Чат %s: сбор не удался", ref)
             repo.finish_run(run_id, status="error", error=str(exc))
             failures.append(f"{ref}: {exc}")
-            await asyncio.sleep(0)
     report.deleted_old = repo.delete_older_than(settings.retention_days, datetime.now(UTC))
     if report.deleted_old:
         log.info(

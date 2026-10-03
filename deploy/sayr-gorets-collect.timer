@@ -1,0 +1,16 @@
+# Таймер ежедневного сбора: 04:00 по Ташкенту, с небольшим случайным сдвигом.
+# Persistent=true — если сервер спал в 04:00, прогон запустится при включении.
+#
+# Установка: см. шапку sayr-gorets-collect.service.
+
+[Unit]
+Description=Sayr: таймер сбора сообщений форума «ГОРЕЦ»
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Tashkent
+Persistent=true
+RandomizedDelaySec=15min
+Unit=sayr-gorets-collect.service
+
+[Install]
+WantedBy=timers.target

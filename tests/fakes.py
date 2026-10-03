@@ -97,6 +97,14 @@ class FakeTelegramClient:
                 raise FloodWaitError(request=None, capture=self.flood_seconds)
             yield m
 
+    async def get_input_entity(self, target):
+        if isinstance(target, int) and not getattr(self, "dialogs_loaded", False):
+            raise ValueError("нет в кэше")
+        return target
+
+    async def get_dialogs(self, limit=None):
+        self.dialogs_loaded = True
+
     async def send_message(self, entity, message, **kw):
         self.sent.append((entity, message))
 

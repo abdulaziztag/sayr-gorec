@@ -1,0 +1,39 @@
+# Ежедневный сбор сообщений форума «ГОРЕЦ» в базу sayr_gorets.
+#
+# Установка (от root на VPS):
+#   cp deploy/sayr-gorets-collect.service deploy/sayr-gorets-collect.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now sayr-gorets-collect.timer
+# Проверка:
+#   systemctl list-timers 'sayr-gorets-*'
+#   systemctl start sayr-gorets-collect.service   # запустить вручную прямо сейчас
+#   journalctl -u sayr-gorets-collect.service -n 50
+# Ошибка прогона = ненулевой код выхода = служба failed (видно в `systemctl --failed`).
+
+[Unit]
+Description=Sayr: сбор сообщений форума «ГОРЕЦ»
+Documentation=https://github.com/abdulaziztag/sayr-gorec
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Projects/sayr-gorets
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets collect
+# Сбор обычно укладывается в минуты; большой догон после простоя — в часы.
+TimeoutStartSec=3h
+Environment=PYTHONUNBUFFERED=1
+
+# Защита: ничего, кроме reports/, служба писать не может.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/Projects/sayr-gorets/reports
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

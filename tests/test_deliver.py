@@ -36,6 +36,13 @@ def test_resolve_owner() -> None:
     assert resolve_owner(42) == 42
 
 
+def test_numeric_owner_is_resolved_through_dialogs(tmp_path: Path) -> None:
+    client = FakeTelegramClient([])
+    assert asyncio.run(send_report(client, "123456", text="Отчёт", file_path=None)) == "parts"
+    assert client.dialogs_loaded is True
+    assert client.sent == [(123456, "Отчёт")]
+
+
 def test_send_as_parts_or_file(tmp_path: Path) -> None:
     client = FakeTelegramClient([])
     report = tmp_path / "2026-W40.md"
