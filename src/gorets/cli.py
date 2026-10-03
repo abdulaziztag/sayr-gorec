@@ -22,7 +22,7 @@ from gorets.catalog import CatalogError, fetch_catalog
 from gorets.config import Settings, load_settings
 from gorets.db import make_engine
 from gorets.digest.claude import AnthropicGateway, ClaudeError
-from gorets.digest.run import DigestDeps, DigestError, run_digest
+from gorets.digest.run import DigestDeps, DigestError, resend_digest, run_digest
 from gorets.digest.weeks import Week, parse_week, previous_week
 from gorets.envfile import append_key, has_key
 from gorets.importer import ImportResult, import_export
@@ -187,7 +187,11 @@ def build_digest_deps(settings: Settings, *, dry_run: bool) -> DigestDeps:
 
 def cmd_digest(args: argparse.Namespace, settings: Settings) -> int:
     week = resolve_week(args, settings)
-    deps = build_digest_deps(settings, dry_run=args.dry_run)
+    deps = build_digest_deps(settings, dry_run=args.dry_run or args.resend)
+    if args.resend:
+        how = asyncio.run(resend_digest(settings, deps, week=week))
+        print(f"Неделя {week.label}: отчёт отправлен заново ({how})")
+        return 0
     outcome = asyncio.run(
         run_digest(settings, deps, week=week, dry_run=args.dry_run, send=not args.no_send)
     )
@@ -295,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="только объём, число кусков и оценка цены"
     )
     p.add_argument("--no-send", action="store_true", help="собрать отчёт, но не отправлять")
+    p.add_argument("--resend", action="store_true", help="отправить уже собранный отчёт ещё раз")
     p.set_defaults(func=cmd_digest)
 
     p = sub.add_parser("forget-author", help="удалить всё написанное автором (по id Telegram)")

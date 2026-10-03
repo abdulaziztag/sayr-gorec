@@ -45,6 +45,9 @@ BATCH_TIMEOUT = "batch_timeout"
 DONE = "done"
 ERROR = "error"
 RESUMABLE = {BATCH_SUBMITTED, BATCH_TIMEOUT}
+# Готовую неделю тоже можно пересобрать без повторного батча: результаты
+# кусков лежат в базе, платится только сведение.
+REUSABLE = RESUMABLE | {DONE, "synthesizing"}
 
 Sender = Callable[[str, Path], Awaitable[str]]
 
@@ -190,6 +193,17 @@ def plan_digest(settings: Settings, deps: DigestDeps, week: Week) -> DigestPlan:
     return DigestPlan(week, messages, chunks, stats, catalog, chat_names, estimate)
 
 
+def plan_fingerprint(settings: Settings, chunks: list[Chunk]) -> str:
+    """Отпечаток нарезки вместе с моделью и инструкцией: изменилось что-то — батч новый."""
+    import hashlib
+
+    digest = hashlib.sha256(chunks_fingerprint(chunks).encode())
+    digest.update(settings.chunk_model.encode())
+    digest.update(prompts.CHUNK_SYSTEM.encode())
+    digest.update(str(settings.structured_output).encode())
+    return digest.hexdigest()
+
+
 def assemble_report(
     *,
     week: Week,
@@ -275,6 +289,26 @@ def _collect_chunk_results(
     return results, usage, cost, notes
 
 
+async def resend_digest(settings: Settings, deps: DigestDeps, *, week: Week) -> str:
+    """Отправить уже собранный отчёт ещё раз (например, после сбоя доставки)."""
+    digest = deps.repo.get_digest(week.label)
+    if digest is None or not digest.report_json:
+        raise DigestError(
+            f"Отчёта за {week.label} в базе нет — соберите его: gorets digest --week …"
+        )
+    if deps.sender is None or not settings.owner:
+        raise DigestError("Отправить некому: задайте GORETS_OWNER и сессию Telegram")
+    md_path = Path(settings.reports_dir) / f"{week.label}.md"
+    if not md_path.exists():
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(
+            digest.report_md or render_markdown(digest.report_json), encoding="utf-8"
+        )
+    how = await deps.sender(render_telegram(digest.report_json), md_path)
+    deps.repo.save_digest(week.label, delivered_at=deps.now())
+    return how
+
+
 async def run_digest(
     settings: Settings,
     deps: DigestDeps,
@@ -341,18 +375,21 @@ async def _run_digest(
     if plan.chunks:
         if deps.gateway is None:
             raise DigestError("Нет клиента Claude: задайте ANTHROPIC_API_KEY")
-        fingerprint = chunks_fingerprint(plan.chunks)
+        fingerprint = plan_fingerprint(settings, plan.chunks)
         existing = repo.get_digest(week.label)
         batch_id = None
-        if (
-            existing is not None
-            and existing.status in RESUMABLE
-            and existing.batch_id
-            and existing.chunks_fingerprint == fingerprint
-        ):
-            batch_id = existing.batch_id
-            log.info("Неделя %s: забираем ранее отправленный батч %s", week.label, batch_id)
-        if batch_id is None:
+        stored_results = None
+        if existing is not None and existing.chunks_fingerprint == fingerprint:
+            if existing.status in REUSABLE and existing.chunk_results:
+                stored_results = dict(existing.chunk_results)
+                log.info("Неделя %s: результаты кусков берём из базы", week.label)
+            elif existing.status in RESUMABLE and existing.batch_id:
+                batch_id = existing.batch_id
+                log.info("Неделя %s: забираем ранее отправленный батч %s", week.label, batch_id)
+        if stored_results is not None:
+            chunk_results = stored_results
+            notes.append("результаты кусков взяты из прошлого разбора, батч не отправлялся")
+        elif batch_id is None:
             system = chunk_system(plan.catalog)
             requests = [
                 chunk_request(c, settings=settings, system=system, week=week) for c in plan.chunks
@@ -361,37 +398,14 @@ async def _run_digest(
             log.info(
                 "Неделя %s: отправлен батч %s из %s кусков", week.label, batch_id, len(requests)
             )
-        repo.save_digest(
-            week.label,
-            status=BATCH_SUBMITTED,
-            batch_id=batch_id,
-            chunks_fingerprint=fingerprint,
-            **base_fields,
-        )
-        status = wait_for_batch(
-            deps.gateway,
-            batch_id,
-            max_wait_seconds=settings.batch_wait_hours * 3600,
-            poll_seconds=settings.batch_poll_seconds,
-            sleep=deps.sleep,
-            clock=deps.clock,
-        )
-        if status is None:
+        if stored_results is None:
+            chunk_results, usage, cost, notes = _await_batch(
+                settings, deps, week, plan, batch_id, fingerprint, base_fields, notes
+            )
+        else:
             repo.save_digest(
-                week.label,
-                status=BATCH_TIMEOUT,
-                error=f"батч {batch_id} не завершился за {settings.batch_wait_hours} ч",
+                week.label, status="synthesizing", chunks_fingerprint=fingerprint, **base_fields
             )
-            raise DigestError(
-                f"Батч {batch_id} не завершился за {settings.batch_wait_hours} ч; "
-                "повторный запуск `gorets digest --week …` заберёт его результаты"
-            )
-        items = deps.gateway.batch_results(batch_id)
-        chunk_results, usage, cost, notes = _collect_chunk_results(items, plan.chunks, settings)
-        if not chunk_results:
-            repo.save_digest(week.label, status=ERROR, error="ни один кусок не разобран")
-            raise DigestError("Ни один кусок не разобран: " + "; ".join(notes))
-        repo.save_digest(week.label, status="synthesizing", chunk_results=chunk_results)
 
     merged = merge_chunk_results(list(chunk_results.values()))
     if plan.chunks:
@@ -501,3 +515,50 @@ def _synthesize(
         deps.repo.save_digest(week.label, status=ERROR, error=str(exc))
         raise DigestError(f"Сведение не разобрано: {exc}") from exc
     return synthesis, completion.usage
+
+
+def _await_batch(
+    settings: Settings,
+    deps: DigestDeps,
+    week: Week,
+    plan: DigestPlan,
+    batch_id: str,
+    fingerprint: str,
+    base_fields: dict[str, Any],
+    notes: list[str],
+) -> tuple[dict[str, dict[str, Any]], Usage, float, list[str]]:
+    """Дождаться батча и разобрать ответы; не успел — ошибка с запомненным id."""
+    repo = deps.repo
+    assert deps.gateway is not None
+    repo.save_digest(
+        week.label,
+        status=BATCH_SUBMITTED,
+        batch_id=batch_id,
+        chunks_fingerprint=fingerprint,
+        **base_fields,
+    )
+    status = wait_for_batch(
+        deps.gateway,
+        batch_id,
+        max_wait_seconds=settings.batch_wait_hours * 3600,
+        poll_seconds=settings.batch_poll_seconds,
+        sleep=deps.sleep,
+        clock=deps.clock,
+    )
+    if status is None:
+        repo.save_digest(
+            week.label,
+            status=BATCH_TIMEOUT,
+            error=f"батч {batch_id} не завершился за {settings.batch_wait_hours} ч",
+        )
+        raise DigestError(
+            f"Батч {batch_id} не завершился за {settings.batch_wait_hours} ч; "
+            "повторный запуск `gorets digest --week …` заберёт его результаты"
+        )
+    items = deps.gateway.batch_results(batch_id)
+    chunk_results, usage, cost, batch_notes = _collect_chunk_results(items, plan.chunks, settings)
+    if not chunk_results:
+        repo.save_digest(week.label, status=ERROR, error="ни один кусок не разобран")
+        raise DigestError("Ни один кусок не разобран: " + "; ".join(batch_notes))
+    repo.save_digest(week.label, status="synthesizing", chunk_results=chunk_results)
+    return chunk_results, usage, cost, [*notes, *batch_notes]

@@ -44,7 +44,19 @@ class FakeRepo:
 
     def get_digest(self, week):
         data = self.digests.get(week)
-        return SimpleNamespace(**data) if data else None
+        if not data:
+            return None
+        # У настоящей строки digests есть все колонки, даже незаполненные.
+        defaults = {
+            "status": "pending",
+            "batch_id": None,
+            "chunks_fingerprint": None,
+            "chunk_results": None,
+            "report_md": None,
+            "report_json": None,
+            "delivered_at": None,
+        }
+        return SimpleNamespace(**{**defaults, **data})
 
     def save_digest(self, week, **fields):
         self.digests.setdefault(week, {"week": week}).update(fields)
@@ -329,3 +341,37 @@ def test_no_send_flag(tmp_path: Path) -> None:
         )
     )
     assert outcome.status == DONE and outcome.delivered is None and sent == []
+
+
+def test_rebuild_of_done_week_reuses_chunk_results(tmp_path: Path) -> None:
+    from gorets.digest.run import resend_digest
+
+    repo = FakeRepo([row(1, "Снег на Бельдерсае"), row(2, "и лёд")])
+    gateway = FakeGateway()
+    sent: list = []
+    settings = make_settings(tmp_path)
+    first = asyncio.run(run_digest(settings, make_deps(repo, gateway, sent=sent), week=WEEK))
+    assert first.status == DONE and len(gateway.submitted) == 1
+
+    # Пересборка той же недели: батч не отправляется, платится только сведение.
+    second = asyncio.run(run_digest(settings, make_deps(repo, gateway, sent=sent), week=WEEK))
+    assert second.status == DONE
+    assert len(gateway.submitted) == 1
+    assert len(gateway.completions) == 2
+    assert any("из прошлого разбора" in n for n in second.notes)
+    assert second.cost_usd < first.cost_usd
+
+    # Сменилась модель кусков — отпечаток другой, батч нужен новый.
+    changed = make_settings(tmp_path, chunk_model="claude-haiku-9")
+    third = asyncio.run(run_digest(changed, make_deps(repo, gateway, sent=sent), week=WEEK))
+    assert third.status == DONE and len(gateway.submitted) == 2
+
+    # Повторная отправка готового отчёта.
+    how = asyncio.run(resend_digest(settings, make_deps(repo, gateway, sent=sent), week=WEEK))
+    assert how == "parts" and len(sent) == 4
+    with pytest.raises(DigestError, match="в базе нет"):
+        asyncio.run(
+            resend_digest(
+                settings, make_deps(FakeRepo([]), gateway), week=parse_week("2026-W41", TZ)
+            )
+        )
