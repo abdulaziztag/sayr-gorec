@@ -1,0 +1,17 @@
+# Таймер недельного разбора: понедельник 09:00 по Ташкенту.
+# Неделя — с понедельника по воскресенье по Ташкенту, то есть разбирается
+# только что закончившаяся неделя.
+#
+# Установка: см. шапку sayr-gorets-digest.service.
+
+[Unit]
+Description=Sayr: таймер недельного разбора форума «ГОРЕЦ»
+
+[Timer]
+OnCalendar=Mon *-*-* 09:00:00 Asia/Tashkent
+Persistent=true
+RandomizedDelaySec=5min
+Unit=sayr-gorets-digest.service
+
+[Install]
+WantedBy=timers.target

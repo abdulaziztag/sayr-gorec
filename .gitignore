@@ -1,0 +1,18 @@
+# Секреты и локальные настройки
+.env
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Отчёты, собранные на сервере, в репозиторий не попадают
+reports/*
+!reports/.gitkeep

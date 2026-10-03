@@ -1,0 +1,40 @@
+# Недельный разбор форума «ГОРЕЦ» моделью Claude и отчёт владельцу в Telegram.
+#
+# Установка (от root на VPS):
+#   cp deploy/sayr-gorets-digest.service deploy/sayr-gorets-digest.timer /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now sayr-gorets-digest.timer
+# Проверка:
+#   systemctl list-timers 'sayr-gorets-*'
+#   journalctl -u sayr-gorets-digest.service -n 100
+# Пересобрать неделю вручную:
+#   cd /root/Projects/sayr-gorets && .venv/bin/gorets digest --week 2026-W40
+# Ошибка (в том числе батч, не успевший за отведённое время) = служба failed.
+
+[Unit]
+Description=Sayr: недельный разбор форума «ГОРЕЦ»
+Documentation=https://github.com/abdulaziztag/sayr-gorec
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Projects/sayr-gorets
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets digest
+# Батч опрашивается до GORETS_BATCH_WAIT_HOURS (по умолчанию 6 ч); запас сверху.
+TimeoutStartSec=8h
+Environment=PYTHONUNBUFFERED=1
+
+# Защита: на запись доступен только каталог отчётов.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/Projects/sayr-gorets/reports
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

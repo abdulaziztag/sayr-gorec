@@ -1,0 +1,318 @@
+{
+ "name": "ГОРЕЦ (тест)",
+ "type": "public_supergroup",
+ "id": 1234567890,
+ "messages": [
+  {
+   "id": 1,
+   "type": "service",
+   "date": "2022-11-10T12:00:00",
+   "date_unixtime": "1668063600",
+   "actor": "ГОРЕЦ (тест)",
+   "actor_id": "channel1234567890",
+   "action": "create_channel",
+   "title": "ГОРЕЦ (тест)",
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 100,
+   "type": "service",
+   "date": "2025-10-01T09:00:00",
+   "date_unixtime": "1759291200",
+   "actor": "Админ",
+   "actor_id": "user1",
+   "action": "topic_created",
+   "title": "Выходы и сборы",
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 101,
+   "type": "message",
+   "date": "2025-10-01T09:15:00",
+   "date_unixtime": "1759292100",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "reply_to_message_id": 100,
+   "text": [
+    "Идём на ",
+    {
+     "type": "bold",
+     "text": "Бельдерсай"
+    },
+    " в субботу, пишите ",
+    {
+     "type": "mention",
+     "text": "@ivan_petrov"
+    },
+    " или ",
+    {
+     "type": "phone",
+     "text": "+998 90 123 45 67"
+    },
+    ", почта ",
+    {
+     "type": "email",
+     "text": "ivan@example.com"
+    },
+    ". Форум: ",
+    {
+     "type": "mention",
+     "text": "@gorets_uzb"
+    }
+   ],
+   "text_entities": []
+  },
+  {
+   "id": 102,
+   "type": "message",
+   "date": "2025-10-01T09:20:00",
+   "date_unixtime": "1759292400",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "reply_to_message_id": 101,
+   "text": "Я с вами! Мой номер 93 765 43 21",
+   "text_entities": []
+  },
+  {
+   "id": 103,
+   "type": "message",
+   "date": "2025-10-01T10:00:00",
+   "date_unixtime": "1759294800",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "reply_to_message_id": 100,
+   "file": "(File not included. Change data exporting settings to download.)",
+   "file_name": "Beldersay_2025.gpx",
+   "mime_type": "application/gpx+xml",
+   "text": "Трек прошлого года",
+   "text_entities": []
+  },
+  {
+   "id": 104,
+   "type": "message",
+   "date": "2025-10-01T10:05:00",
+   "date_unixtime": "1759295100",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "photo": "(File not included. Change data exporting settings to download.)",
+   "width": 1280,
+   "height": 960,
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 105,
+   "type": "message",
+   "date": "2025-10-01T10:10:00",
+   "date_unixtime": "1759295400",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "media_type": "voice_message",
+   "mime_type": "audio/ogg",
+   "duration_seconds": 5,
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 106,
+   "type": "message",
+   "date": "2025-10-01T10:15:00",
+   "date_unixtime": "1759295700",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "location_information": {
+    "latitude": 41.3110816,
+    "longitude": 69.2797372
+   },
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 107,
+   "type": "message",
+   "date": "2025-10-01T10:20:00",
+   "date_unixtime": "1759296000",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "location_information": {
+    "latitude": 41.5,
+    "longitude": 70.0
+   },
+   "place_name": "Чимган, нижняя станция",
+   "address": "Бостанлыкский район",
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 108,
+   "type": "message",
+   "date": "2025-10-01T10:25:00",
+   "date_unixtime": "1759296300",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "poll": {
+    "question": "Когда идём?",
+    "closed": false,
+    "total_voters": 3,
+    "answers": [
+     {
+      "text": "Суббота",
+      "voters": 2,
+      "chosen": false
+     },
+     {
+      "text": "Воскресенье",
+      "voters": 1,
+      "chosen": false
+     }
+    ]
+   },
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 109,
+   "type": "message",
+   "date": "2025-10-01T10:30:00",
+   "date_unixtime": "1759296600",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "forwarded_from": "Погода в горах",
+   "forwarded_from_id": "channel555",
+   "text": "Завтра снег выше 2500",
+   "text_entities": []
+  },
+  {
+   "id": 110,
+   "type": "message",
+   "date": "2025-10-01T10:35:00",
+   "date_unixtime": "1759296900",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "forwarded_from": "Пётр Сидоров",
+   "text": "Пересланное от человека",
+   "text_entities": []
+  },
+  {
+   "id": 111,
+   "type": "message",
+   "date": "2025-10-01T10:40:00",
+   "date_unixtime": "1759297200",
+   "edited": "2025-10-01T11:00:00",
+   "edited_unixtime": "1759298400",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "text": "Отредактированное сообщение",
+   "text_entities": []
+  },
+  {
+   "id": 112,
+   "type": "message",
+   "date": "2025-10-01T10:45:00",
+   "date_unixtime": "1759297500",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "media_type": "sticker",
+   "sticker_emoji": "🙂",
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 113,
+   "type": "message",
+   "date": "2025-10-01T10:50:00",
+   "date_unixtime": "1759297800",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "media_type": "video_file",
+   "mime_type": "video/mp4",
+   "duration_seconds": 10,
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 114,
+   "type": "service",
+   "date": "2025-10-01T10:55:00",
+   "date_unixtime": "1759298100",
+   "actor": "Админ",
+   "actor_id": "user1",
+   "action": "pin_message",
+   "message_id": 101,
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 115,
+   "type": "message",
+   "date": "2025-10-01T11:00:00",
+   "date_unixtime": "1759298400",
+   "from": "Combot",
+   "from_id": "user7777",
+   "text": "Добро пожаловать в группу!",
+   "text_entities": []
+  },
+  {
+   "id": 116,
+   "type": "message",
+   "date": "2025-10-01T11:05:00",
+   "date_unixtime": "1759298700",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "contact_information": {
+    "first_name": "Гид",
+    "last_name": "",
+    "phone_number": "+998901234567"
+   },
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 117,
+   "type": "message",
+   "date": "2025-10-01T11:10:00",
+   "date_unixtime": "1759299000",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "location_information": {
+    "latitude": 41.0,
+    "longitude": 70.0
+   },
+   "live_location_period_seconds": 3600,
+   "text": "",
+   "text_entities": []
+  },
+  {
+   "id": 118,
+   "type": "message",
+   "date": "2025-10-01T11:15:00",
+   "date_unixtime": "1759299300",
+   "from": "Мария К",
+   "from_id": "user654321",
+   "reply_to_message_id": 50,
+   "text": "Ответ на удалённое сообщение",
+   "text_entities": []
+  },
+  {
+   "id": 119,
+   "type": "message",
+   "date": "2025-10-01T11:20:00",
+   "date_unixtime": "1759299600",
+   "from": "ГОРЕЦ (тест)",
+   "from_id": "channel1234567890",
+   "text": "Сообщение от имени группы",
+   "text_entities": []
+  },
+  {
+   "id": 120,
+   "type": "message",
+   "date": "2025-10-01T11:25:00",
+   "from": "Иван Петров",
+   "from_id": "user123456",
+   "text": "Без unixtime — местное время Ташкента",
+   "text_entities": []
+  }
+ ]
+}
