@@ -57,7 +57,9 @@ def setup_logging(level: str) -> None:
     )
     # Telethon многословен на INFO, а нам важны только предупреждения.
     logging.getLogger("telethon").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # SDK Anthropic пишет каждый HTTP-запрос на INFO — в журнале это шум.
+    for name in ("httpx", "httpx2", "httpcore", "anthropic"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def make_repo(settings: Settings) -> Repository:
