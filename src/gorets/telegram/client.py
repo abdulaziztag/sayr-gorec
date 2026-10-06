@@ -12,7 +12,9 @@ class TelegramNotConfigured(RuntimeError):
     pass
 
 
-def make_client(settings: Settings, session: str | None = None) -> TelegramClient:
+def make_client(
+    settings: Settings, session: str | None = None, *, updates: bool = False
+) -> TelegramClient:
     """Клиент с сессией из настроек (или переданной явно, как при входе).
 
     `receive_updates=False`: сборщик ничего не слушает в реальном времени,
@@ -25,7 +27,7 @@ def make_client(settings: Settings, session: str | None = None) -> TelegramClien
         StringSession(session),
         settings.tg_api_id,
         settings.tg_api_hash,
-        receive_updates=False,
+        receive_updates=updates,
         flood_sleep_threshold=settings.flood_wait_max,
         # Чтобы Telegram не считал клиент подозрительным, представляемся понятно.
         device_model="sayr-gorets",
@@ -33,11 +35,11 @@ def make_client(settings: Settings, session: str | None = None) -> TelegramClien
     )
 
 
-async def connect_authorized(settings: Settings) -> TelegramClient:
+async def connect_authorized(settings: Settings, *, updates: bool = False) -> TelegramClient:
     """Подключиться по сохранённой сессии; без авторизации — ошибка с подсказкой."""
     if not settings.tg_session:
         raise TelegramNotConfigured("Нет GORETS_TG_SESSION: выполните `gorets login`")
-    client = make_client(settings, settings.tg_session)
+    client = make_client(settings, settings.tg_session, updates=updates)
     await client.connect()
     if not await client.is_user_authorized():
         await client.disconnect()

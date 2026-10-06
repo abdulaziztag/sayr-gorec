@@ -1,0 +1,20 @@
+# Оповещение владельца в Telegram о сбое любой службы sayr-gorets.
+# Запускается самим systemd через OnFailure=sayr-gorets-alert@%n.service
+# в остальных unit-файлах; вручную включать не нужно.
+#
+# Установка (от root):
+#   cp deploy/sayr-gorets-alert@.service /etc/systemd/system/
+#   systemctl daemon-reload
+# Проверка:
+#   systemctl start sayr-gorets-alert@test.service   # придёт тестовое сообщение
+
+[Unit]
+Description=Sayr: оповещение о сбое %i
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Projects/sayr-gorets
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets alert %i
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict

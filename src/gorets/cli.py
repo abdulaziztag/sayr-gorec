@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from gorets import __version__
@@ -295,6 +296,36 @@ def cmd_api(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_watch(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.telegram.watch import run_watch
+
+    repo = make_repo(settings)
+    project = load_project_config(settings.config_file)
+
+    async def run(client: Any) -> None:
+        await run_watch(settings, repo, client, project)
+
+    asyncio.run(_with_client(settings, run, updates=True))
+    return 0
+
+
+def cmd_alert(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.alert import alert_text, send_alert
+
+    repo = None
+    try:
+        repo = make_repo(settings)
+    except Exception:
+        repo = None
+    text = alert_text(args.unit, repo)
+    if not settings.owner:
+        log.error("GORETS_OWNER не задан, оповещение некому: %s", text)
+        return 1
+    asyncio.run(_with_client(settings, lambda c: send_alert(c, settings.owner or "", text)))
+    print("Оповещение отправлено")
+    return 0
+
+
 def cmd_forget_author(args: argparse.Namespace, settings: Settings) -> int:
     if not settings.author_hmac_secret:
         raise ValueError("Не задан GORETS_AUTHOR_HMAC_SECRET")
@@ -390,6 +421,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host")
     p.add_argument("--port", type=int)
     p.set_defaults(func=cmd_api)
+
+    p = sub.add_parser("watch", help="слушать чаты в реальном времени и слать вебхуки фидов")
+    p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("alert", help="сообщить владельцу о сбое службы (systemd OnFailure)")
+    p.add_argument("unit", help="имя unit-а systemd")
+    p.set_defaults(func=cmd_alert)
 
     p = sub.add_parser("forget-author", help="удалить всё написанное автором (по id Telegram)")
     p.add_argument("tg_user_id", type=int)

@@ -28,6 +28,10 @@ class FeedConfig:
     # В коммерческих ветках (афиши, объявления) телефоны и ники — часть
     # предложения, а не личные данные; их не стираем.
     keep_contacts: bool = False
+    # Куда слать новые сообщения фида в реальном времени (служба `gorets watch`):
+    # POST с JSON сообщения и подписью HMAC-SHA256 по webhook_secret.
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
 
     def chat_matches(self, chat_id: int, username: str | None) -> bool:
         ref = self.chat.lstrip("@").lower()
@@ -147,6 +151,8 @@ def parse_project_config(data: dict[str, Any], base_dir: Path) -> ProjectConfig:
             topics=_topics(raw.get("topics")),
             description=str(raw.get("description", "")),
             keep_contacts=bool(raw.get("keep_contacts", False)),
+            webhook_url=raw.get("webhook_url") or None,
+            webhook_secret=raw.get("webhook_secret") or None,
         )
     for name, raw in (data.get("extractors") or {}).items():
         if not isinstance(raw, dict) or not raw.get("prompt"):

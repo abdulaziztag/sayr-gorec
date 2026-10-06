@@ -16,55 +16,11 @@ from gorets import __version__
 from gorets.config import Settings
 from gorets.events import EVENT_EXTRACTORS, build_events, to_ical
 from gorets.feeds import ProjectConfig
-from gorets.models import Extraction, Message
+from gorets.models import Message
+from gorets.serialize import extraction_to_dict, message_link, message_to_dict
 from gorets.storage import Repository
 
 MAX_LIMIT = 500
-
-
-def message_link(username: str | None, chat_id: int, msg_id: int) -> str:
-    if username:
-        return f"https://t.me/{username}/{msg_id}"
-    return f"https://t.me/c/{chat_id}/{msg_id}"
-
-
-def message_to_dict(m: Message, username: str | None) -> dict[str, Any]:
-    return {
-        "chat_id": m.chat_id,
-        "msg_id": m.msg_id,
-        "date": m.date.isoformat(),
-        "topic_id": m.topic_id,
-        "topic_title": m.topic_title,
-        "reply_to_msg_id": m.reply_to_msg_id,
-        "author": m.author_hash,
-        "text": m.text,
-        "media_type": m.media_type,
-        "file_name": m.file_name,
-        "lat": float(m.lat) if m.lat is not None else None,
-        "lng": float(m.lng) if m.lng is not None else None,
-        "forwarded_from": m.forwarded_from,
-        "edited_at": m.edited_at.isoformat() if m.edited_at else None,
-        "fingerprint": m.fingerprint,
-        "link": message_link(username, m.chat_id, m.msg_id),
-    }
-
-
-def extraction_to_dict(e: Extraction, username: str | None) -> dict[str, Any]:
-    return {
-        "id": e.id,
-        "extractor": e.extractor,
-        "chat_id": e.chat_id,
-        "msg_id": e.msg_id,
-        "message_date": e.message_date.isoformat(),
-        "topic_id": e.topic_id,
-        "topic_title": e.topic_title,
-        "status": e.status,
-        "data": e.data,
-        "error": e.error,
-        "model": e.model,
-        "created_at": e.created_at.isoformat(),
-        "link": message_link(username, e.chat_id, e.msg_id),
-    }
 
 
 def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> FastAPI:

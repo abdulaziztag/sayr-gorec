@@ -111,6 +111,8 @@ def test_parser_has_all_commands() -> None:
         "digest",
         "extract",
         "api",
+        "watch",
+        "alert",
         "forget-author",
         "forget-message",
         "stats",

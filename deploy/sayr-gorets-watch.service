@@ -1,0 +1,36 @@
+# Слушатель новых сообщений в реальном времени: пишет в базу сразу и шлёт
+# вебхуки фидов, у которых в gorets.toml задан webhook_url. Необязателен:
+# без него данные приходят раз в день со сбором.
+#
+# Установка (от root):
+#   cp deploy/sayr-gorets-watch.service deploy/sayr-gorets-alert@.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now sayr-gorets-watch.service
+#   journalctl -u sayr-gorets-watch.service -f
+
+[Unit]
+Description=Sayr: слушатель форума «ГОРЕЦ» в реальном времени
+Documentation=https://github.com/abdulaziztag/sayr-gorec
+After=network-online.target postgresql.service
+Wants=network-online.target
+OnFailure=sayr-gorets-alert@%n.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Projects/sayr-gorets
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets watch
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

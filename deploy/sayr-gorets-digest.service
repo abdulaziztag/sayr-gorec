@@ -16,6 +16,7 @@ Description=Sayr: недельный разбор форума «ГОРЕЦ»
 Documentation=https://github.com/abdulaziztag/sayr-gorec
 After=network-online.target postgresql.service
 Wants=network-online.target
+OnFailure=sayr-gorets-alert@%n.service
 
 [Service]
 Type=oneshot
