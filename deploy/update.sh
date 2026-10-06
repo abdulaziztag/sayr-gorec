@@ -23,8 +23,13 @@ else
 fi
 git log -1 --oneline
 
-echo "==> Зависимости (uv sync --frozen --no-dev)"
-uv sync --frozen --no-dev
+# Дополнение mcp сохраняем, если оно было поставлено при установке.
+EXTRAS=()
+if ls .venv/lib/python*/site-packages/mcp >/dev/null 2>&1; then
+    EXTRAS+=(--extra mcp)
+fi
+echo "==> Зависимости (uv sync --frozen --no-dev ${EXTRAS[*]})"
+uv sync --frozen --no-dev "${EXTRAS[@]}"
 
 echo "==> Схема базы (alembic upgrade head)"
 .venv/bin/alembic upgrade head
