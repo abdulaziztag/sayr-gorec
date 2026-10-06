@@ -170,6 +170,17 @@ async def harvest(
         batch.clear()
         if on_progress and result.last_id is not None:
             on_progress(result.last_id, result.new)
+        # Долгий первый сбор без признаков жизни пугает; раз в тысячу сообщений
+        # пишем, где мы, чтобы это было видно в journalctl и в терминале.
+        if result.stored // 1000 != (result.stored - settings.upsert_batch) // 1000:
+            log.info(
+                "Чат %s: просмотрено %s, записано %s (новых %s), последний id %s",
+                chat.username or chat.chat_id,
+                result.seen,
+                result.stored,
+                result.new,
+                result.last_id,
+            )
 
     try:
         iterator = client.iter_messages(
