@@ -43,6 +43,7 @@ def message_to_dict(m: Message, username: str | None) -> dict[str, Any]:
         "lng": float(m.lng) if m.lng is not None else None,
         "forwarded_from": m.forwarded_from,
         "edited_at": m.edited_at.isoformat() if m.edited_at else None,
+        "fingerprint": m.fingerprint,
         "link": message_link(username, m.chat_id, m.msg_id),
     }
 
@@ -125,6 +126,9 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
         until: datetime | None = None,
         q: str | None = Query(None, min_length=2, description="подстрока в тексте"),
         limit: int = Query(100, ge=1, le=MAX_LIMIT),
+        dedupe: bool = Query(
+            False, description="пропускать повторы одного текста (и из других чатов)"
+        ),
     ) -> dict[str, Any]:
         chat_id = feed_chat_id(name)
         rows = repo.feed_messages(
@@ -135,6 +139,7 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
             until=until,
             q=q,
             limit=limit + 1,
+            dedupe=dedupe,
         )
         has_more = len(rows) > limit
         rows = rows[:limit]
@@ -144,6 +149,41 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
             "next_cursor": rows[-1].msg_id if rows else after,
             "has_more": has_more,
         }
+
+    @router.get("/search")
+    def search(
+        q: str = Query(..., min_length=2, description='запрос: слова, "фраза", -минус'),
+        feed: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = Query(50, ge=1, le=MAX_LIMIT),
+    ) -> dict[str, Any]:
+        """Полнотекстовый поиск по всем собранным сообщениям (русская морфология)."""
+        chat_id = feed_chat_id(feed) if feed else None
+        topics = project.feeds[feed].topics if feed else ()
+        rows = repo.search_messages(
+            q, chat_id=chat_id, topics=topics, since=since, until=until, limit=limit
+        )
+        return {"items": [message_to_dict(m, username_of(m.chat_id)) for m in rows]}
+
+    @router.get("/messages/{chat}/{msg_id}/duplicates")
+    def duplicates(chat: str, msg_id: int) -> dict[str, Any]:
+        """Тот же текст в других чатах или ветках (по отпечатку)."""
+        chat_id = repo.resolve_chat_id(chat)
+        if chat_id is None:
+            raise HTTPException(status_code=404, detail="Чат не найден")
+        with repo.session() as s:
+            m = s.get(Message, (chat_id, msg_id))
+        if m is None:
+            raise HTTPException(status_code=404, detail="Сообщения нет")
+        if not m.fingerprint:
+            return {"items": []}
+        rows = [
+            d
+            for d in repo.duplicates_of(m.fingerprint)
+            if (d.chat_id, d.msg_id) != (chat_id, msg_id)
+        ]
+        return {"items": [message_to_dict(d, username_of(d.chat_id)) for d in rows]}
 
     @router.get("/extractors")
     def extractors() -> dict[str, Any]:

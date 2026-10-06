@@ -24,6 +24,7 @@ from gorets.anonymize import author_hash
 from gorets.cleaning import EMAIL, PHONE, USER, TextCleaner
 from gorets.config import Settings
 from gorets.feeds import load_project_config
+from gorets.fingerprint import text_fingerprint
 from gorets.storage import Repository, as_decimal_coord, chunked
 from gorets.telegram.convert import GENERAL_TOPIC_ID, GENERAL_TOPIC_TITLE, track_type
 
@@ -260,6 +261,7 @@ class ExportConverter:
             "lng": as_decimal_coord(lng),
             "forwarded_from": forwarded_from,
             "edited_at": _parse_date(item, "edited", self.tz),
+            "fingerprint": text_fingerprint(text),
         }
 
 

@@ -176,3 +176,28 @@ def test_normalize_chat_id() -> None:
     assert normalize_chat_id(-1001234567890) == 1234567890
     assert normalize_chat_id(1234567890) == 1234567890
     assert normalize_chat_id(-123) == 123
+
+
+def test_full_text_search_and_duplicates(repo: Repository) -> None:
+    afisha = "Поход на Большой Чимган 12 октября! Сбор в 6:00 у метро. Цена 150 000 сум, звоните."
+    from gorets.fingerprint import text_fingerprint
+
+    repo.upsert_chat(CHAT, username="gorets_uzb", title="ГОРЕЦ", is_forum=True)
+    repo.upsert_messages(
+        [
+            _row(1, text="Снега на Бельдерсае по колено, тропа закрыта", days_ago=3),
+            _row(2, text="Кто идёт на Чимган в субботу?", days_ago=2),
+            _row(3, text=afisha, days_ago=1, fingerprint=text_fingerprint(afisha)),
+            {**_row(4, text=afisha, fingerprint=text_fingerprint(afisha)), "chat_id": 777},
+        ]
+    )
+    found = repo.search_messages("чимган")
+    assert [m.msg_id for m in found] == [4, 3, 2]  # морфология: «Чимган» и «на Чимгане»
+    assert [m.msg_id for m in repo.search_messages("снег бельдерсай")] == [1]
+    assert [m.msg_id for m in repo.search_messages("чимган -поход")] == [2]
+    assert [m.msg_id for m in repo.search_messages("чимган", chat_id=777)] == [4]
+    dupes = repo.duplicates_of(text_fingerprint(afisha))
+    assert [(m.chat_id, m.msg_id) for m in dupes] == [(CHAT, 3), (777, 4)]
+    # Дедупликация в фиде: копия в другом чате пропускается, оригинал остаётся.
+    assert [m.msg_id for m in repo.feed_messages(777, (), dedupe=True)] == []
+    assert [m.msg_id for m in repo.feed_messages(CHAT, (), dedupe=True)] == [1, 2, 3]

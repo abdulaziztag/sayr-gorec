@@ -16,6 +16,7 @@ from telethon.helpers import add_surrogate, del_surrogate
 from telethon.tl import types as tl
 
 from gorets.cleaning import USER
+from gorets.fingerprint import text_fingerprint
 from gorets.storage import as_decimal_coord
 
 # В форуме сообщения без ветки лежат в «General» — у него всегда id 1.
@@ -252,4 +253,5 @@ def message_to_row(
         "lng": as_decimal_coord(media.lng),
         "forwarded_from": forwarded_channel_title(msg, fwd_title),
         "edited_at": _as_utc(msg.edit_date),
+        "fingerprint": text_fingerprint(text),
     }

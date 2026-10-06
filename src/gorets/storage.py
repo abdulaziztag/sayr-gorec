@@ -9,7 +9,7 @@ from typing import Any
 
 from sqlalchemy import Engine, and_, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from gorets.db import make_session_factory
 from gorets.models import Chat, Digest, ExtractBatch, Extraction, Message, Run, SyncState
@@ -29,6 +29,7 @@ _MESSAGE_UPDATABLE = (
     "lng",
     "forwarded_from",
     "edited_at",
+    "fingerprint",
 )
 
 
@@ -88,7 +89,11 @@ class Repository:
         """
         if not rows:
             return 0
-        stmt = insert(Message).values(list(rows))
+        # У многострочного INSERT ключи берутся из первой строки: выравниваем
+        # все строки по общему набору ключей, чтобы ничего не потерялось молча.
+        keys = sorted({k for row in rows for k in row})
+        aligned = [{k: row.get(k) for k in keys} for row in rows]
+        stmt = insert(Message).values(aligned)
         stmt = stmt.on_conflict_do_update(
             index_elements=[Message.chat_id, Message.msg_id],
             set_={name: getattr(stmt.excluded, name) for name in _MESSAGE_UPDATABLE},
@@ -280,9 +285,12 @@ class Repository:
         until: datetime | None = None,
         q: str | None = None,
         limit: int = 100,
+        dedupe: bool = False,
     ) -> list[Message]:
         """Сообщения фида по возрастанию id: курсор потребителя — последний msg_id."""
         stmt = select(Message).where(Message.chat_id == chat_id)
+        if dedupe:
+            stmt = stmt.where(self._not_duplicate())
         topic_filter = self._topic_filter(topics)
         if topic_filter is not None:
             stmt = stmt.where(topic_filter)
@@ -297,6 +305,57 @@ class Repository:
         stmt = stmt.order_by(Message.msg_id).limit(limit)
         with self.session() as s:
             return list(s.execute(stmt).scalars())
+
+    @staticmethod
+    def _not_duplicate():
+        """Нет более раннего сообщения с тем же отпечатком (в любом чате)."""
+        earlier = aliased(Message)
+        return ~exists().where(
+            and_(
+                earlier.fingerprint == Message.fingerprint,
+                Message.fingerprint.is_not(None),
+                or_(
+                    earlier.date < Message.date,
+                    and_(earlier.date == Message.date, earlier.msg_id < Message.msg_id),
+                ),
+            )
+        )
+
+    def search_messages(
+        self,
+        query: str,
+        *,
+        chat_id: int | None = None,
+        topics: Sequence[str | int] = (),
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+    ) -> list[Message]:
+        """Полнотекстовый поиск с русской морфологией, новые сначала."""
+        tsquery = func.websearch_to_tsquery("russian", query)
+        stmt = select(Message).where(Message.search.op("@@")(tsquery))
+        if chat_id is not None:
+            stmt = stmt.where(Message.chat_id == chat_id)
+        topic_filter = self._topic_filter(topics)
+        if topic_filter is not None:
+            stmt = stmt.where(topic_filter)
+        if since is not None:
+            stmt = stmt.where(Message.date >= since)
+        if until is not None:
+            stmt = stmt.where(Message.date < until)
+        stmt = stmt.order_by(Message.date.desc(), Message.msg_id.desc()).limit(limit)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def duplicates_of(self, fingerprint: str) -> list[Message]:
+        with self.session() as s:
+            return list(
+                s.execute(
+                    select(Message)
+                    .where(Message.fingerprint == fingerprint)
+                    .order_by(Message.date, Message.msg_id)
+                ).scalars()
+            )
 
     def messages_without_extraction(
         self,

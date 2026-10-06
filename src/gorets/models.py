@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    Computed,
     DateTime,
     Index,
     Integer,
@@ -22,7 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Типы вложений. Медиа не скачиваем — только тип и имя файла.
@@ -80,11 +81,19 @@ class Message(Base):
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), default=func.now()
     )
+    # Отпечаток текста для дублей между чатами (см. fingerprint.py).
+    fingerprint: Mapped[str | None] = mapped_column(String(32))
+    # Полнотекстовый индекс считается базой из text: русская морфология.
+    search = mapped_column(
+        TSVECTOR, Computed("to_tsvector('russian', coalesce(text, ''))", persisted=True)
+    )
 
     __table_args__ = (
         Index("ix_messages_date", "date"),
         Index("ix_messages_author_hash", "author_hash"),
         Index("ix_messages_chat_topic_date", "chat_id", "topic_id", "date"),
+        Index("ix_messages_fingerprint", "fingerprint"),
+        Index("ix_messages_search", "search", postgresql_using="gin"),
     )
 
 
