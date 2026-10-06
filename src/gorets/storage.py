@@ -271,8 +271,10 @@ class Repository:
         clauses = []
         if ids:
             clauses.append(Message.topic_id.in_(ids))
-        if titles:
-            clauses.append(func.lower(func.trim(Message.topic_title)).in_(titles))
+        for title in titles:
+            # По началу названия, как в FeedConfig.topic_matches.
+            escaped = title.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append(func.lower(func.trim(Message.topic_title)).like(escaped + "%"))
         return or_(*clauses)
 
     def feed_messages(
@@ -399,8 +401,9 @@ class Repository:
                 for name in ("status", "data", "error", "model", "input_tokens", "output_tokens")
             },
         )
+        stmt = stmt.returning(Extraction.id)
         with self.session() as s, s.begin():
-            return int(s.execute(stmt).rowcount or 0)
+            return len(s.execute(stmt).all())
 
     def list_extractions(
         self,
@@ -452,6 +455,147 @@ class Repository:
                 .where(ExtractBatch.batch_id == batch_id)
                 .values(status=status, finished_at=func.now())
             )
+
+    # --- места, вопросы, события, авторы -----------------------------------------
+
+    def place_mentions(
+        self, slug: str, *, since: datetime | None = None, limit: int = 100
+    ) -> list[Extraction]:
+        """Извлечения, где место привязано к slug: поле place_slug или список places[]."""
+        stmt = (
+            select(Extraction)
+            .where(
+                Extraction.status == "ok",
+                or_(
+                    Extraction.data["place_slug"].as_string() == slug,
+                    Extraction.data["places"].contains([{"slug": slug}]),
+                ),
+            )
+            .order_by(Extraction.message_date.desc(), Extraction.id.desc())
+            .limit(limit)
+        )
+        if since is not None:
+            stmt = stmt.where(Extraction.message_date >= since)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def top_places(self, *, since: datetime | None = None, limit: int = 30) -> list[dict[str, Any]]:
+        """Сколько сообщений упоминают каждое место каталога (по всем извлекателям)."""
+        sql = text(
+            """
+            WITH hits AS (
+                SELECT chat_id, msg_id, data->>'place_slug' AS slug
+                FROM extractions
+                WHERE status = 'ok' AND data->>'place_slug' IS NOT NULL
+                  AND (CAST(:since AS timestamptz) IS NULL
+                       OR message_date >= CAST(:since AS timestamptz))
+                UNION
+                SELECT e.chat_id, e.msg_id, p->>'slug' AS slug
+                FROM extractions e, jsonb_array_elements(e.data->'places') AS p
+                WHERE e.status = 'ok' AND jsonb_typeof(e.data->'places') = 'array'
+                  AND p->>'slug' IS NOT NULL
+                  AND (CAST(:since AS timestamptz) IS NULL
+                       OR e.message_date >= CAST(:since AS timestamptz))
+            )
+            SELECT slug, count(*) AS mentions
+            FROM hits GROUP BY slug ORDER BY mentions DESC, slug LIMIT :limit
+            """
+        )
+        with self.session() as s:
+            rows = s.execute(sql, {"since": since, "limit": limit}).all()
+        return [{"slug": slug, "mentions": int(n)} for slug, n in rows]
+
+    def question_themes(
+        self, *, since: datetime | None = None, examples: int = 3
+    ) -> list[dict[str, Any]]:
+        """Темы вопросов со счётчиками и примерами — бэклог приложения."""
+        stmt = (
+            select(Extraction)
+            .where(Extraction.extractor == "user_question", Extraction.status == "ok")
+            .order_by(Extraction.message_date.desc())
+        )
+        if since is not None:
+            stmt = stmt.where(Extraction.message_date >= since)
+        themes: dict[str, dict[str, Any]] = {}
+        with self.session() as s:
+            for e in s.execute(stmt).scalars():
+                data = e.data or {}
+                theme = str(data.get("theme") or "other")
+                entry = themes.setdefault(
+                    theme, {"theme": theme, "count": 0, "examples": [], "places": {}}
+                )
+                entry["count"] += 1
+                if len(entry["examples"]) < examples and data.get("question"):
+                    entry["examples"].append(
+                        {"question": data["question"], "chat_id": e.chat_id, "msg_id": e.msg_id}
+                    )
+                slug = data.get("place_slug")
+                if slug:
+                    entry["places"][slug] = entry["places"].get(slug, 0) + 1
+        result = sorted(themes.values(), key=lambda t: (-t["count"], t["theme"]))
+        for entry in result:
+            entry["places"] = sorted(
+                ({"slug": k, "count": v} for k, v in entry["places"].items()),
+                key=lambda x: -x["count"],
+            )[:5]
+        return result
+
+    def author_stats(
+        self,
+        chat_id: int,
+        topics: Sequence[str | int] = (),
+        *,
+        since: datetime | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Самые активные авторы (по хешам): сообщений и полученных ответов."""
+        replies = aliased(Message)
+        stmt = (
+            select(
+                Message.author_hash,
+                func.count(func.distinct(Message.msg_id)).label("messages"),
+                func.count(replies.msg_id).label("replies_received"),
+            )
+            .outerjoin(
+                replies,
+                and_(replies.chat_id == Message.chat_id, replies.reply_to_msg_id == Message.msg_id),
+            )
+            .where(Message.chat_id == chat_id, Message.author_hash.is_not(None))
+            .group_by(Message.author_hash)
+            .order_by(
+                func.count(replies.msg_id).desc(), func.count(func.distinct(Message.msg_id)).desc()
+            )
+            .limit(limit)
+        )
+        topic_filter = self._topic_filter(topics)
+        if topic_filter is not None:
+            stmt = stmt.where(topic_filter)
+        if since is not None:
+            stmt = stmt.where(Message.date >= since)
+        with self.session() as s:
+            rows = s.execute(stmt).all()
+        return [{"author": a, "messages": int(m), "replies_received": int(r)} for a, m, r in rows]
+
+    def extractions_for_events(
+        self, extractors: Sequence[str], *, since: datetime | None = None
+    ) -> list[Extraction]:
+        stmt = (
+            select(Extraction)
+            .where(Extraction.extractor.in_(list(extractors)), Extraction.status == "ok")
+            .order_by(Extraction.message_date)
+        )
+        if since is not None:
+            stmt = stmt.where(Extraction.message_date >= since)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def last_runs_by_kind(self) -> dict[str, Run]:
+        with self.session() as s:
+            runs = s.execute(select(Run).order_by(Run.started_at.desc()).limit(200)).scalars()
+            latest: dict[str, Run] = {}
+            for run in runs:
+                latest.setdefault(run.kind, run)
+            return latest
 
     # --- статистика ---------------------------------------------------------------
 

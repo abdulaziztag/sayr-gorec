@@ -70,6 +70,7 @@ description = "Треки и файлы маршрутов"
 [extractors.afisha_tour]
 feeds = ["afisha"]
 description = "Тур или выход из афиши"
+link_places = ["place"]        # → data.place_slug из каталога Sayr
 # model = "claude-haiku-4-5-20251001"   # по умолчанию GORETS_EXTRACT_MODEL
 prompt = """
 Сообщение из ветки афиш туристического форума Узбекистана. Если это объявление
@@ -107,6 +108,7 @@ schema = '''
 [extractors.companion_request]
 feeds = ["companions", "companions_hikinguz"]
 description = "Объявление о поиске попутчиков"
+link_places = ["place"]
 prompt = """
 Сообщение из ветки поиска попутчиков. Если кто-то ищет компанию в конкретный
 поход или предлагает присоединиться — извлеки по схеме. Ответы, уточнения и
@@ -134,6 +136,7 @@ schema = '''
 [extractors.trail_condition]
 feeds = ["dispatch", "dispatch_hikinguz", "chat", "reports_hikinguz"]
 description = "Состояние тропы, дороги, погоды в конкретном месте"
+link_places = ["place"]
 prompt = """
 Сообщение туристического форума. Если в нём есть сведения о текущем состоянии
 конкретного места — снег, лавины, вода и броды, дорога и подъезд, закрытия и
@@ -153,6 +156,67 @@ schema = '''
     "severity":    {"type": "string", "enum": ["info", "caution", "danger"]}
   },
   "required": ["place", "kind", "text", "observed_on", "severity"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.place_mentions]
+feeds = ["chat", "routes", "reports_hikinguz", "dispatch", "dispatch_hikinguz"]
+description = "Какие места упоминаются в сообщении (для страницы места в Sayr)"
+link_places = ["places[].name"]   # → slug у каждого места
+prompt = """
+Сообщение туристического форума Узбекистана. Перечисли конкретные места
+(вершины, перевалы, озёра, ущелья, реки, маршруты, базы, сёла как точки
+маршрутов), о которых идёт речь. name — как принято называть место (одна
+форма), context — одной фразой, в каком качестве упомянуто (были там, идут,
+спрашивают, состояние). Если мест нет — relevant = false.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "places": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":    {"type": "string"},
+          "context": {"type": "string"}
+        },
+        "required": ["name", "context"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["places"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.user_question]
+feeds = ["chat", "routes", "companions", "companions_hikinguz"]
+description = "Вопросы участников — бэклог того, чего не хватает в приложении"
+link_places = ["place"]
+prompt = """
+Сообщение туристического форума. Если участник задаёт вопрос (ищет
+информацию, совет, подтверждение), извлеки его по схеме; иначе
+relevant = false. theme — одна из тем: transport (как добраться, такси,
+дорога), route (маршрут, тропа, время, сложность), gear (снаряжение),
+weather (погода, сезон, снег), permits (пропуска, погранзона, запреты),
+water (вода, родники), stay (ночёвка, база, палатки), safety (безопасность,
+опасности, связь), companions (попутчики, группа), app (приложение Sayr,
+карты, треки, навигация), other. question — вопрос в пересказе одной фразой,
+place — место, о котором спрашивают, если есть.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "theme":    {"type": "string", "enum": ["transport", "route", "gear", "weather", "permits", "water", "stay", "safety", "companions", "app", "other"]},
+    "question": {"type": "string"},
+    "place":    {"anyOf": [{"type": "string"}, {"type": "null"}]}
+  },
+  "required": ["theme", "question", "place"],
   "additionalProperties": false
 }
 '''

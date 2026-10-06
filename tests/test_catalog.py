@@ -73,3 +73,27 @@ def test_fetch_catalog_gives_up() -> None:
 def test_catalog_text() -> None:
     text = catalog_text([Place("chimgan", "Чимган", "Chimyon", "peak", "Ташкентская")])
     assert text.splitlines()[1] == "chimgan | Чимган | Chimyon | peak | Ташкентская"
+
+
+def test_place_linker() -> None:
+    from gorets.catalog import PlaceLinker
+
+    linker = PlaceLinker(
+        [
+            Place("beldersay", "Бельдерсай", "Beldersoy"),
+            Place("big-chimgan", "Большой Чимган", "Katta Chimyon"),
+            Place("pulatkhan", "Плато Пулатхан", "Pulatxon"),
+            Place("urungach", "Озеро Урунгач", "Urungach ko'li"),
+        ]
+    )
+    assert linker.link("Бельдерсай") == "beldersay"
+    assert linker.link("гора Бельдерсай") == "beldersay"
+    assert linker.link("Beldersoy") == "beldersay"
+    assert linker.link("Большой Чимган") == "big-chimgan"
+    assert linker.link("Пулатхан") == "pulatkhan"
+    assert linker.link("озёра Урунгач") == "urungach"
+    assert (
+        linker.link("Урунгачские озёра") is None or linker.link("Урунгачские озёра") == "urungach"
+    )
+    assert linker.link("Ташкент") is None
+    assert linker.link("") is None and linker.link(None) is None

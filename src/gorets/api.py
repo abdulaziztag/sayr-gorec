@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 
 from gorets import __version__
 from gorets.config import Settings
+from gorets.events import EVENT_EXTRACTORS, build_events, to_ical
 from gorets.feeds import ProjectConfig
 from gorets.models import Extraction, Message
 from gorets.storage import Repository
@@ -101,7 +102,30 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "version": __version__}
+        """Живость сервиса и свежесть данных: без токена, для мониторинга."""
+        runs = repo.last_runs_by_kind()
+        now = datetime.now(UTC)
+        collect = runs.get("collect")
+        fresh = bool(
+            collect
+            and collect.status == "ok"
+            and collect.finished_at
+            and now - collect.finished_at < timedelta(hours=36)
+        )
+        return {
+            "ok": True,
+            "collect_fresh": fresh,
+            "version": __version__,
+            "runs": {
+                kind: {
+                    "status": run.status,
+                    "started_at": run.started_at.isoformat(),
+                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                    "error": run.error,
+                }
+                for kind, run in runs.items()
+            },
+        }
 
     @router.get("/feeds")
     def feeds() -> dict[str, Any]:
@@ -184,6 +208,78 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
             if (d.chat_id, d.msg_id) != (chat_id, msg_id)
         ]
         return {"items": [message_to_dict(d, username_of(d.chat_id)) for d in rows]}
+
+    @router.get("/places/top")
+    def places_top(
+        since: datetime | None = None, limit: int = Query(30, ge=1, le=200)
+    ) -> dict[str, Any]:
+        """Места каталога по числу упоминаний — «места в ходу» в любой момент."""
+        return {"items": repo.top_places(since=since, limit=limit)}
+
+    @router.get("/places/{slug}/mentions")
+    def place_mentions(
+        slug: str, since: datetime | None = None, limit: int = Query(100, ge=1, le=MAX_LIMIT)
+    ) -> dict[str, Any]:
+        """Всё, что извлекли о месте: упоминания, состояние, туры, вопросы."""
+        rows = repo.place_mentions(slug, since=since, limit=limit)
+        return {"items": [extraction_to_dict(e, username_of(e.chat_id)) for e in rows]}
+
+    @router.get("/questions/themes")
+    def question_themes(since: datetime | None = None) -> dict[str, Any]:
+        """О чём спрашивают, по темам со счётчиками — бэклог приложения."""
+        items = repo.question_themes(since=since)
+        for theme in items:
+            for ex in theme["examples"]:
+                ex["link"] = message_link(username_of(ex["chat_id"]), ex["chat_id"], ex["msg_id"])
+        return {"items": items}
+
+    @router.get("/stats/authors")
+    def stats_authors(
+        feed: str,
+        since: datetime | None = None,
+        limit: int = Query(20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        """Самые активные и самые «отвечаемые» авторы фида (только хеши)."""
+        chat_id = feed_chat_id(feed)
+        return {
+            "items": repo.author_stats(
+                chat_id, project.feeds[feed].topics, since=since, limit=limit
+            )
+        }
+
+    def _events(
+        date_from: date | None, date_to: date | None, kind: str | None, since: datetime | None
+    ) -> list[Any]:
+        rows = repo.extractions_for_events(list(EVENT_EXTRACTORS), since=since)
+        return build_events(
+            rows,
+            link=lambda chat_id, msg_id: message_link(username_of(chat_id), chat_id, msg_id),
+            date_from=date_from,
+            date_to=date_to,
+            kind=kind,
+        )
+
+    @router.get("/events")
+    def events(
+        date_from: date | None = Query(None, alias="from"),
+        date_to: date | None = Query(None, alias="to"),
+        kind: str | None = Query(None, pattern="^(tour|companions)$"),
+        since: datetime | None = Query(None, description="по дате публикации"),
+    ) -> dict[str, Any]:
+        """Календарь выходов: туры из афиш и попутчики, дубли из разных чатов схлопнуты."""
+        return {"items": [ev.to_dict() for ev in _events(date_from, date_to, kind, since)]}
+
+    @router.get("/events.ics")
+    def events_ics(
+        date_from: date | None = Query(None, alias="from"),
+        date_to: date | None = Query(None, alias="to"),
+        kind: str | None = Query(None, pattern="^(tour|companions)$"),
+    ) -> Any:
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(
+            to_ical(_events(date_from, date_to, kind, None)), media_type="text/calendar"
+        )
 
     @router.get("/extractors")
     def extractors() -> dict[str, Any]:

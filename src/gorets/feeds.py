@@ -66,6 +66,9 @@ class ExtractorConfig:
     description: str = ""
     model: str | None = None  # None — GORETS_EXTRACT_MODEL
     max_tokens: int = 2048
+    # Поля с названиями мест, которые после извлечения привязываются к каталогу
+    # Sayr: "place" → data["place_slug"], "places[].name" → slug у каждого элемента.
+    link_places: tuple[str, ...] = ()
 
 
 @dataclass
@@ -163,6 +166,7 @@ def parse_project_config(data: dict[str, Any], base_dir: Path) -> ProjectConfig:
             description=str(raw.get("description", "")),
             model=raw.get("model"),
             max_tokens=int(raw.get("max_tokens", 2048)),
+            link_places=tuple(str(f) for f in (raw.get("link_places") or [])),
         )
     return config
 

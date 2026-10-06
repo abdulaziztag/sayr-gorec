@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gorets.api import create_app
+from gorets.catalog import Place
 from gorets.config import Settings
 from gorets.digest.claude import BatchItem, BatchStatus, Usage
 from gorets.extract import ExtractError, run_extract, wrapped_schema
@@ -62,16 +63,18 @@ class ExtractGateway:
         items = []
         for r in self.submitted[int(batch_id.split("_")[1]) - 1]:
             text = r["params"]["messages"][0]["content"]
-            if "сколько" in text:
+            props = r["params"]["output_config"]["format"]["schema"]["properties"]["data"]
+            props = props["anyOf"][0]["properties"]
+            if "сколько" in text and "theme" not in props:
                 answer = {"relevant": False, "data": None}
-            else:
+            elif "title" in props:
                 answer = {
                     "relevant": True,
                     "data": {
                         "title": text.splitlines()[-1][:30],
                         "organizer": None,
                         "contact": None,
-                        "place": "Бельдерсай",
+                        "place": "гора Бельдерсай",
                         "region": None,
                         "date_start": "2026-10-12",
                         "date_end": None,
@@ -82,6 +85,52 @@ class ExtractGateway:
                         "includes": [],
                         "transport": None,
                         "summary": "тур",
+                    },
+                }
+            elif "theme" in props:
+                if "сколько" not in text:
+                    answer = {"relevant": False, "data": None}
+                else:
+                    answer = {
+                        "relevant": True,
+                        "data": {
+                            "theme": "route",
+                            "question": "сколько идти",
+                            "place": "Бельдерсай",
+                        },
+                    }
+            elif "places" in props:
+                answer = {
+                    "relevant": True,
+                    "data": {
+                        "places": [
+                            {"name": "Бельдерсай", "context": "идут"},
+                            {"name": "Неизвестное место", "context": "?"},
+                        ]
+                    },
+                }
+            elif "kind" in props:
+                answer = {
+                    "relevant": True,
+                    "data": {
+                        "place": "Бельдерсай",
+                        "kind": "snow",
+                        "text": "снег",
+                        "observed_on": None,
+                        "severity": "caution",
+                    },
+                }
+            else:
+                answer = {
+                    "relevant": True,
+                    "data": {
+                        "place": "Чимган",
+                        "date_start": "2026-10-19",
+                        "date_end": None,
+                        "group_size": 3,
+                        "has_car": True,
+                        "difficulty": None,
+                        "summary": "ищу компанию",
                     },
                 }
             items.append(
@@ -109,9 +158,19 @@ def settings(**overrides) -> Settings:
     return Settings(_env_file=None, **base)
 
 
+CATALOG = [Place("beldersay", "Бельдерсай", "Beldersoy"), Place("big-chimgan", "Большой Чимган")]
+
+
 def run(repo, gateway, **kw):
     return run_extract(
-        settings(), repo, PROJECT, gateway, sleep=lambda s: None, clock=lambda: 0.0, **kw
+        settings(),
+        repo,
+        PROJECT,
+        gateway,
+        sleep=lambda s: None,
+        clock=lambda: 0.0,
+        catalog_fetcher=lambda: CATALOG,
+        **kw,
     )
 
 
@@ -142,6 +201,7 @@ def test_run_extract_stores_results_and_skips_done(repo: Repository) -> None:
     ok = repo.list_extractions("afisha_tour")
     assert [e.msg_id for e in ok] == [2, 5]
     assert ok[0].data["price"] == 300000
+    assert ok[0].data["place_slug"] == "beldersay"  # «гора Бельдерсай» привязана к каталогу
     assert ok[0].topic_title == "АФИША ПОХОДОВ"
     assert repo.list_extractions("afisha_tour", status="skipped")[0].msg_id == 3
     # Повтор ничего не отправляет: всё уже извлечено.
@@ -231,7 +291,7 @@ def test_api_endpoints(repo: Repository) -> None:
 
     ext = client.get("/extractions/afisha_tour", headers={"X-API-Token": "t0k"}).json()
     assert [e["msg_id"] for e in ext["items"]] == [2, 5]
-    assert ext["items"][0]["data"]["place"] == "Бельдерсай"
+    assert ext["items"][0]["data"]["place_slug"] == "beldersay"
     assert ext["items"][0]["link"].endswith("/2")
     everything = client.get("/extractions/afisha_tour", params={"status": "all"}, headers=auth)
     assert len(everything.json()["items"]) == 3
@@ -251,3 +311,75 @@ def test_api_endpoints(repo: Repository) -> None:
 def test_api_requires_token() -> None:
     with pytest.raises(RuntimeError, match="GORETS_API_TOKEN"):
         create_app(settings(api_token=None), None, PROJECT)
+
+
+def seed_more(repo: Repository) -> None:
+    """Чат, диспетчерская и попутчики для мест, вопросов, событий и авторов."""
+    repo.upsert_chat(2, username="hikinguz", title="Горняшка", is_forum=True)
+    repo.upsert_messages(
+        [
+            _row(
+                10,
+                text="Снега на Бельдерсае много",
+                topic_id=7,
+                topic_title="ДИСПЕТЧЕРСКАЯ",
+                author=1,
+            ),
+            _row(11, text="А сколько идти до Бельдерсая?", topic_id=3, topic_title="ЧАТ", author=2),
+            _row(12, text="Часа три", topic_id=3, topic_title="ЧАТ", author=1, reply_to_msg_id=11),
+            {
+                **_row(
+                    13,
+                    text="Ищу компанию на Чимган 19 октября, есть машина",
+                    topic_id=4,
+                    topic_title="Кто куда ? (поиск попутчиков)",
+                ),
+                "chat_id": 2,
+            },
+        ]
+    )
+
+
+def test_places_questions_events_authors_health(repo: Repository) -> None:
+    seed(repo)
+    seed_more(repo)
+    run(repo, ExtractGateway())
+    client = TestClient(create_app(settings(), repo, PROJECT))
+    auth = {"Authorization": "Bearer t0k"}
+
+    top = client.get("/places/top", headers=auth).json()["items"]
+    assert top[0]["slug"] == "beldersay" and top[0]["mentions"] >= 3
+    mentions = client.get("/places/beldersay/mentions", headers=auth).json()["items"]
+    assert {m["extractor"] for m in mentions} >= {
+        "afisha_tour",
+        "trail_condition",
+        "place_mentions",
+    }
+    assert client.get("/places/nowhere/mentions", headers=auth).json()["items"] == []
+
+    themes = client.get("/questions/themes", headers=auth).json()["items"]
+    assert themes[0]["theme"] == "route" and themes[0]["count"] >= 1
+    assert themes[0]["examples"][0]["link"].startswith("https://t.me/gorets_uzb/")
+    assert themes[0]["places"][0]["slug"] == "beldersay"
+
+    authors = client.get("/stats/authors", params={"feed": "chat"}, headers=auth).json()["items"]
+    assert authors[0]["replies_received"] == 1 and len(authors[0]["author"]) == 64
+
+    events = client.get("/events", headers=auth).json()["items"]
+    kinds = {e["kind"] for e in events}
+    assert kinds == {"tour", "companions"}
+    tour = next(e for e in events if e["kind"] == "tour")
+    assert tour["place_slug"] == "beldersay" and tour["date_start"] == "2026-10-12"
+    companions = next(e for e in events if e["kind"] == "companions")
+    assert companions["link"] == "https://t.me/hikinguz/13"
+    only = client.get("/events", params={"from": "2026-10-15", "kind": "companions"}, headers=auth)
+    assert [e["kind"] for e in only.json()["items"]] == ["companions"]
+    ics = client.get("/events.ics", headers=auth)
+    assert ics.headers["content-type"].startswith("text/calendar")
+    assert "DTSTART;VALUE=DATE:20261012" in ics.text
+
+    run_id = repo.start_run("collect")
+    repo.finish_run(run_id, status="ok")
+    health = client.get("/health").json()
+    assert health["collect_fresh"] is True and health["runs"]["collect"]["status"] == "ok"
+    assert health["runs"]["extract"]["status"] == "ok" if "extract" in health["runs"] else True

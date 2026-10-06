@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from gorets.catalog import CatalogError, PlaceLinker, fetch_catalog
 from gorets.config import Settings
 from gorets.digest.claude import BatchItem, ClaudeError, ClaudeGateway, extract_json, wait_for_batch
 from gorets.digest.pricing import cost_usd
@@ -143,6 +144,21 @@ def results_to_rows(
     return rows, tokens_in, tokens_out
 
 
+def link_places_in(data: dict[str, Any], paths: tuple[str, ...], linker: PlaceLinker) -> None:
+    """Проставить slug каталога по путям вида "place" и "places[].name"."""
+    for path in paths:
+        if "[]." in path:
+            list_key, item_key = path.split("[].", 1)
+            items = data.get(list_key)
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        item["slug"] = linker.link(item.get(item_key))
+        else:
+            value = data.get(path)
+            data[f"{path}_slug"] = linker.link(value) if isinstance(value, str) else None
+
+
 def _collect_batch(
     repo: Repository,
     gateway: ClaudeGateway,
@@ -153,6 +169,7 @@ def _collect_batch(
     settings: Settings,
     sleep: Any,
     clock: Any,
+    linker: PlaceLinker | None = None,
 ) -> dict[str, Any] | None:
     """Дождаться батча и записать результаты; None — не успел, остаётся pending."""
     status = wait_for_batch(
@@ -169,6 +186,10 @@ def _collect_batch(
     rows, tokens_in, tokens_out = results_to_rows(
         extractor, gateway.batch_results(batch_id), meta, model=model
     )
+    if linker is not None and extractor.link_places:
+        for row in rows:
+            if isinstance(row.get("data"), dict):
+                link_places_in(row["data"], extractor.link_places, linker)
     saved = repo.save_extractions(rows)
     repo.finish_extract_batch(batch_id)
     cost = cost_usd(model, input_tokens=tokens_in, output_tokens=tokens_out, batch=True)
@@ -200,6 +221,7 @@ def run_extract(
     dry_run: bool = False,
     sleep: Any = None,
     clock: Any = None,
+    catalog_fetcher: Any = None,
 ) -> ExtractReport:
     import time
 
@@ -213,6 +235,17 @@ def run_extract(
         return report
     if not dry_run and gateway is None:
         raise ExtractError("Нет клиента Claude: задайте ANTHROPIC_API_KEY")
+
+    linker: PlaceLinker | None = None
+    if not dry_run and any(e.link_places for e in selected):
+        fetcher = catalog_fetcher or (
+            lambda: fetch_catalog(settings.catalog_url, timeout=settings.catalog_timeout)
+        )
+        try:
+            linker = PlaceLinker(fetcher())
+        except CatalogError as exc:
+            # Без каталога извлечение всё равно полезно: slug останется пустым.
+            log.warning("Каталог Sayr недоступен, места не привязаны: %s", exc)
 
     for extractor in selected:
         entry: dict[str, Any] = {"extractor": extractor.name, "feeds": list(extractor.feeds)}
@@ -233,6 +266,7 @@ def run_extract(
                     settings=settings,
                     sleep=sleep,
                     clock=clock,
+                    linker=linker,
                 )
                 if result is None:
                     report.pending.append(pending.batch_id)
@@ -284,7 +318,15 @@ def run_extract(
             len(requests),
         )
         result = _collect_batch(
-            repo, gateway, extractor, batch_id, meta, settings=settings, sleep=sleep, clock=clock
+            repo,
+            gateway,
+            extractor,
+            batch_id,
+            meta,
+            settings=settings,
+            sleep=sleep,
+            clock=clock,
+            linker=linker,
         )
         if result is None:
             report.pending.append(batch_id)
