@@ -71,12 +71,19 @@ src/gorets/
   feeds.py            фиды и извлекатели из gorets.toml
   extract.py          прогон извлекателей по сообщениям фидов
   api.py              HTTP API для других проектов (FastAPI, только чтение)
+  mcp_server.py       MCP-сервер для агентов (те же данные, что в API)
+  events.py           календарь выходов: туры и попутчики, JSON и iCal
+  webhooks.py         вебхуки фидов с подписью HMAC
+  alert.py            оповещение владельца о сбое службы
+  fingerprint.py      отпечаток текста для дублей
+  serialize.py        сообщение и извлечение в виде словаря
   envfile.py          аккуратная запись строки сессии в .env
   telegram/
     client.py         клиент Telethon, вход
     convert.py        сообщение Telethon → строка базы
     collect.py        ежедневный сбор и порционная догрузка
     deliver.py        доставка отчёта владельцу (частями или файлом)
+    watch.py          слушатель в реальном времени, вебхуки
   digest/
     weeks.py          границы недель по Ташкенту
     chunking.py       нарезка недели по веткам и бюджету токенов
@@ -250,6 +257,9 @@ systemctl enable --now sayr-gorets-collect.timer
 systemctl enable --now sayr-gorets-digest.timer      # после того как владелец написал сборщику
 cp deploy/sayr-gorets-api.service /etc/systemd/system/ && systemctl daemon-reload
 systemctl enable --now sayr-gorets-api.service       # если данные нужны другим проектам
+cp deploy/sayr-gorets-alert@.service deploy/sayr-gorets-watch.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now sayr-gorets-watch.service     # если нужны вебхуки в реальном времени
 ```
 
 В шапке каждого unit-файла — как его установить и проверить. Службы
@@ -288,6 +298,9 @@ sayr-gorets-collect.service` или дождаться таймера). Новы
 | `gorets digest [--week ГГГГ-Wнн] [--dry-run] [--no-send] [--resend]` | Разбор недели (по умолчанию прошлой) и отчёт владельцу; `--dry-run` печатает объём, число кусков и оценку цены, не вызывая API; `--no-send` собирает отчёт без отправки; `--resend` отправляет уже собранный отчёт ещё раз |
 | `gorets extract [--extractor имя] [--since ГГГГ-ММ-ДД] [--limit N] [--dry-run]` | Прогнать извлекатели из `gorets.toml` по новым сообщениям фидов |
 | `gorets api [--host] [--port]` | HTTP API для других проектов |
+| `gorets watch` | Слушатель в реальном времени и вебхуки фидов |
+| `gorets alert <unit>` | Сообщить владельцу о сбое службы (вызывает systemd) |
+| `gorets mcp` | MCP-сервер для агентов (stdio) |
 | `gorets forget-author <tg_user_id>` | Удалить всё, что написал автор (по тому же HMAC) |
 | `gorets forget-message <чат> <id>` | Удалить одно сообщение (чат — username или id) |
 | `gorets stats` | Что в базе, итоги недель, последние прогоны |
@@ -455,12 +468,20 @@ Batches API одним запросом, модель решает, по тем�
 
 | Запрос | Что отдаёт |
 |---|---|
-| `GET /health` | без токена, для мониторинга |
+| `GET /health` | без токена: живость, свежесть сбора, последние прогоны по видам |
 | `GET /feeds` | описанные фиды |
-| `GET /feeds/{name}/messages?after=&since=&until=&q=&limit=` | сообщения фида по возрастанию `msg_id`; `after` — курсор |
+| `GET /feeds/{name}/messages?after=&since=&until=&q=&dedupe=&limit=` | сообщения фида по возрастанию `msg_id`; `after` — курсор; `dedupe=true` пропускает повторы того же текста (и из других чатов) |
+| `GET /search?q=&feed=&since=&until=&limit=` | полнотекстовый поиск с русской морфологией; синтаксис websearch: слова, `"фраза"`, `-минус` |
+| `GET /messages/{chat}/{msg_id}` | одно сообщение |
+| `GET /messages/{chat}/{msg_id}/duplicates` | тот же текст в других чатах и ветках |
 | `GET /extractors` | извлекатели, их схемы и счётчики |
 | `GET /extractions/{name}?after=&since=&until=&status=&limit=` | результаты извлекателя; `after` — курсор по `id`, `status` = `ok` (по умолчанию), `skipped`, `error`, `all` |
-| `GET /messages/{chat}/{msg_id}` | одно сообщение |
+| `GET /events?from=&to=&kind=&since=` | календарь выходов из афиш и попутчиков; `kind` = `tour` или `companions`; дубли из разных чатов схлопнуты |
+| `GET /events.ics?from=&to=&kind=` | то же в iCalendar — можно подписаться календарём |
+| `GET /places/top?since=&limit=` | места каталога Sayr по числу упоминаний |
+| `GET /places/{slug}/mentions?since=&limit=` | всё извлечённое о месте: упоминания, состояние троп, туры, вопросы |
+| `GET /questions/themes?since=` | о чём спрашивают, по темам со счётчиками, примерами и местами — бэклог приложения |
+| `GET /stats/authors?feed=&since=&limit=` | самые активные и самые «отвечаемые» авторы фида (только хеши) |
 | `GET /digests`, `GET /digests/{week}?format=json\|md` | итоги недель |
 
 Ответы списков: `{"items": [...], "next_cursor": …, "has_more": true}`.
@@ -480,6 +501,65 @@ def new_tours(cursor: int | None) -> tuple[list[dict], int | None]:
     page = GORETS.get("/extractions/afisha_tour", params={"after": cursor, "limit": 200}).json()
     return page["items"], page["next_cursor"]   # item["data"] — тур по схеме, item["link"] — пост
 ```
+
+### Привязка мест к каталогу
+
+У извлекателя можно указать `link_places = ["place"]` или
+`["places[].name"]`: после извлечения название места сопоставляется с
+каталогом Sayr без обращения к модели (точное название по-русски или
+по-узбекски, затем «ядро» без слов «гора», «озеро», «перевал», затем
+вхождение) и в данные добавляется `place_slug` (или `slug` у элемента
+списка). На этом держатся `/places/top`, `/places/{slug}/mentions`, слаги в
+событиях и вопросах. Если каталог недоступен, извлечение всё равно
+выполняется, slug остаётся пустым.
+
+### Вебхуки и слушатель в реальном времени
+
+Ежедневный сбор запаздывает на сутки; для афиш это терпимо, для «перевал
+закрыт» — нет. Служба `deploy/sayr-gorets-watch.service` (`gorets watch`)
+держит соединение с Telegram, пишет новые и отредактированные сообщения в
+базу сразу и шлёт `POST` на `webhook_url` каждого фида, в который попало
+сообщение:
+
+```toml
+[feeds.afisha]
+chat = "gorets_uzb"
+topics = ["АФИША ПОХОДОВ"]
+keep_contacts = true
+webhook_url = "http://127.0.0.1:8000/hooks/gorets"
+webhook_secret = "длинный-секрет"
+```
+
+Тело — `{"event": "message" | "message_edited", "feed": "afisha",
+"message": {…как в API…}}`, заголовки `X-Gorets-Event`, `X-Gorets-Feed`
+и `X-Gorets-Signature: sha256=<HMAC-SHA256 тела по webhook_secret>`.
+Проверка на стороне потребителя — `gorets.webhooks.verify_signature`
+или те же три строки на любом языке. Три попытки с паузой, неудача
+пишется в журнал и не останавливает слушатель. Сбор по таймеру остаётся и
+догоняет пропущенное, пока слушатель не работал.
+
+### Оповещения о сбоях
+
+Во всех unit-файлах стоит `OnFailure=sayr-gorets-alert@%n.service`:
+упавшая служба запускает `gorets alert <unit>`, и владелец получает в
+Telegram сообщение с последней ошибкой из журнала прогонов и подсказкой
+`journalctl -u …`. Проверить: `systemctl start sayr-gorets-alert@test.service`.
+
+### MCP-сервер для агентов
+
+`gorets mcp` поднимает MCP-сервер (stdio) с теми же данными: `list_feeds`,
+`feed_messages`, `search_messages`, `list_extractors`, `extractions`,
+`events`, `places_top`, `place_mentions`, `question_themes`, `digest`.
+Нужна дополнительная зависимость: `uv sync --extra mcp` (на сервере
+`uv sync --frozen --no-dev --extra mcp`). Пример для Claude Code на том же
+сервере:
+
+```json
+{"mcpServers": {"gorets": {"command": "/root/Projects/sayr-gorets/.venv/bin/gorets", "args": ["mcp"]}}}
+```
+
+Токен не нужен: сервер ходит в базу напрямую, доступ определяется тем,
+кто может запустить процесс.
 
 ## Цена в месяц
 
@@ -507,7 +587,11 @@ $2 / $10) зашиты в `digest/pricing.py`.
 | **Неделя** | | **≈ $0.37** |
 | **Месяц** (4,3 недели) | | **≈ $1.60** |
 
-Втрое более шумная неделя — около $1, то есть до $5 в месяц. Точную оценку
+Втрое более шумная неделя — около $1, то есть до $5 в месяц. Извлекатели
+добавляют свои копейки: одно сообщение фида — один запрос Haiku в батче,
+около $0.001; при 300 сообщениях в день по трём извлекателям на общий чат
+это ещё $5–10 в месяц. `gorets extract --dry-run` показывает очередь и
+оценку, лишние извлекатели выключаются удалением секции из `gorets.toml`. Точную оценку
 для конкретной недели даёт `gorets digest --week … --dry-run`; фактическая
 стоимость каждого разбора хранится в `digests.cost_usd` и видна в
 `gorets stats`. Telegram и каталог Sayr бесплатны.
@@ -582,7 +666,8 @@ GORETS_TEST_DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/sayr_gore
 импорт выгрузки, upsert без дублей, сроки хранения, сбор и догрузка на
 фейковом Telegram, нарезка недели по бюджету, сведение, сборка отчёта и
 нарезка под Telegram, ожидание батча, полный прогон разбора на фейках,
-`forget-author`, команды CLI.
+`forget-author`, команды CLI, поиск и дубли, извлекатели и привязка мест,
+события и iCal, вебхуки и слушатель, оповещения, инструменты MCP.
 
 Новая миграция после изменения моделей:
 

@@ -383,3 +383,30 @@ def test_places_questions_events_authors_health(repo: Repository) -> None:
     health = client.get("/health").json()
     assert health["collect_fresh"] is True and health["runs"]["collect"]["status"] == "ok"
     assert health["runs"]["extract"]["status"] == "ok" if "extract" in health["runs"] else True
+
+
+def test_mcp_tools(repo: Repository) -> None:
+    from gorets.mcp_server import build_tools, create_server
+
+    seed(repo)
+    seed_more(repo)
+    run(repo, ExtractGateway())
+    tools = build_tools(settings(), repo, PROJECT)
+    assert tools["list_feeds"]()[0]["name"] == "afisha"
+    page = tools["feed_messages"]("afisha", limit=2)
+    assert [m["msg_id"] for m in page["items"]] == [2, 3] and page["has_more"]
+    assert tools["search_messages"]("чимган")[0]["msg_id"] in (5, 13)
+    assert tools["extractions"]("afisha_tour")["items"][0]["data"]["place_slug"] == "beldersay"
+    assert {e["kind"] for e in tools["events"]()} == {"tour", "companions"}
+    assert tools["events"](kind="tour", date_from="2026-10-01")[0]["date_start"] == "2026-10-12"
+    assert tools["places_top"]()[0]["slug"] == "beldersay"
+    assert tools["place_mentions"]("beldersay")
+    assert tools["question_themes"]()[0]["theme"] == "route"
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        tools["digest"]("2026-W01")
+    with _pytest.raises(ValueError):
+        tools["feed_messages"]("nope")
+    server = create_server(settings(), repo, PROJECT)
+    assert server.name == "sayr-gorets"

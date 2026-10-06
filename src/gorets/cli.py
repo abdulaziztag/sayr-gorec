@@ -296,6 +296,19 @@ def cmd_api(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.mcp_server import McpNotInstalled, create_server
+
+    try:
+        server = create_server(
+            settings, make_repo(settings), load_project_config(settings.config_file)
+        )
+    except McpNotInstalled as exc:
+        raise ValueError(str(exc)) from exc
+    server.run(transport="stdio")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace, settings: Settings) -> int:
     from gorets.telegram.watch import run_watch
 
@@ -421,6 +434,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host")
     p.add_argument("--port", type=int)
     p.set_defaults(func=cmd_api)
+
+    p = sub.add_parser("mcp", help="MCP-сервер (stdio) для агентов; нужен `uv sync --extra mcp`")
+    p.set_defaults(func=cmd_mcp)
 
     p = sub.add_parser("watch", help="слушать чаты в реальном времени и слать вебхуки фидов")
     p.set_defaults(func=cmd_watch)

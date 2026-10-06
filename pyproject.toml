@@ -21,6 +21,11 @@ dependencies = [
 [project.scripts]
 gorets = "gorets.cli:main"
 
+[project.optional-dependencies]
+mcp = [
+    "mcp>=2,<3",
+]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
