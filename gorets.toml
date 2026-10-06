@@ -1,0 +1,59 @@
+# Фиды и извлекатели sayr-gorets (путь к файлу — GORETS_CONFIG, по умолчанию gorets.toml).
+# Файл хранится в репозитории: правки — коммитом, на сервер приедут с update.sh.
+#
+# Фид — чат плюс ветки (названия или id). Пустой topics — весь чат.
+# keep_contacts = true — в этих ветках телефоны и ники не стираются:
+# это коммерческие предложения, а не личная переписка.
+
+[feeds.afisha]
+chat = "gorets_uzb"
+topics = ["Афиши"]
+description = "Афиши выходов и туров"
+keep_contacts = true
+
+[feeds.conditions]
+chat = "gorets_uzb"
+topics = []
+description = "Весь форум: для разбора состояния троп"
+
+# Извлекатель — инструкция и JSON-схема, которые прогоняются по каждому
+# новому сообщению фида (Message Batches, вдвое дешевле). Результат хранится
+# бессрочно и отдаётся через API: GET /extractions/afisha_tour.
+# Модель сама решает, относится ли сообщение к теме (relevant = false — пропуск).
+
+[extractors.afisha_tour]
+feed = "afisha"
+description = "Тур или выход из афиши"
+# model = "claude-haiku-4-5-20251001"   # по умолчанию GORETS_EXTRACT_MODEL
+prompt = """
+Сообщение из ветки афиш туристического форума Узбекистана. Если это объявление
+о походе, туре, выезде или сборе — извлеки его по схеме. Если это вопрос,
+обсуждение или отчёт о прошедшем, а не объявление, — relevant = false.
+Даты — в формате ГГГГ-ММ-ДД, если год не указан, считай ближайший будущий.
+Цену — числом в сумах, валюту — как написано. Организатора, телефон и ссылку
+бери как написано: это контакты предложения.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "title":        {"type": "string"},
+    "organizer":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "contact":      {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "place":        {"type": "string"},
+    "region":       {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_start":   {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_end":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "days":         {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "price":        {"anyOf": [{"type": "number"}, {"type": "null"}]},
+    "currency":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "difficulty":   {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "includes":     {"type": "array", "items": {"type": "string"}},
+    "transport":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "summary":      {"type": "string"}
+  },
+  "required": ["title", "organizer", "contact", "place", "region", "date_start", "date_end",
+               "days", "price", "currency", "difficulty", "includes", "transport", "summary"],
+  "additionalProperties": false
+}
+'''

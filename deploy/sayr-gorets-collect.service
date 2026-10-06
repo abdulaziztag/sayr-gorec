@@ -1,4 +1,4 @@
-# Ежедневный сбор сообщений форума «ГОРЕЦ» в базу sayr_gorets.
+# Ежедневный сбор сообщений форума «ГОРЕЦ» в базу sayr_gorets и прогон извлекателей.
 #
 # Установка (от root на VPS):
 #   cp deploy/sayr-gorets-collect.service deploy/sayr-gorets-collect.timer /etc/systemd/system/
@@ -20,8 +20,10 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/root/Projects/sayr-gorets
 ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets collect
+# После сбора — извлекатели из gorets.toml по новым сообщениям фидов.
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets extract
 # Сбор обычно укладывается в минуты; большой догон после простоя — в часы.
-TimeoutStartSec=3h
+TimeoutStartSec=10h
 Environment=PYTHONUNBUFFERED=1
 
 # Защита: ничего, кроме reports/, служба писать не может.

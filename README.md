@@ -19,6 +19,7 @@ Sayr, какие выходы объявлены, о чём чаще всего 
 - [Команды](#команды)
 - [Настройки](#настройки)
 - [Разбор недели](#разбор-недели)
+- [Фиды, извлекатели и API для других проектов](#фиды-извлекатели-и-api-для-других-проектов)
 - [Цена в месяц](#цена-в-месяц)
 - [Обновление и откат](#обновление-и-откат)
 - [Удаление по просьбе](#удаление-по-просьбе)
@@ -67,6 +68,9 @@ src/gorets/
   storage.py          репозиторий: upsert, сроки хранения, forget-*, журнал, итоги
   importer.py         импорт выгрузки Telegram Desktop (ijson)
   catalog.py          каталог мест Sayr (публичный API)
+  feeds.py            фиды и извлекатели из gorets.toml
+  extract.py          прогон извлекателей по сообщениям фидов
+  api.py              HTTP API для других проектов (FastAPI, только чтение)
   envfile.py          аккуратная запись строки сессии в .env
   telegram/
     client.py         клиент Telethon, вход
@@ -86,6 +90,7 @@ src/gorets/
 alembic/              миграции схемы
 deploy/               unit-файлы systemd и update.sh
 reports/              отчёты ГГГГ-Wнн.md и .json (в репозиторий не попадают)
+gorets.toml           фиды и извлекатели (в репозитории)
 ```
 
 ## Выбор аккаунта Telegram и риски
@@ -124,7 +129,8 @@ id подбирается перебором, HMAC с секретом — не�
 около 100 м; живые геопозиции без координат), название канала при
 пересылке (пересылки от людей — без источника), время правки, время сбора.
 
-**Очистка текста при записи:** номера телефонов (узбекские `+998`/`998` в
+**Очистка текста при записи** (кроме веток фидов с `keep_contacts`, см.
+[ниже](#фиды-извлекатели-и-api-для-других-проектов)): номера телефонов (узбекские `+998`/`998` в
 любых разбивках, 9-значные местные, российские, другие международные),
 e-mail, @упоминания людей и ссылки t.me на людей заменяются заглушками
 `[телефон]`, `[почта]`, `[пользователь]`. Ссылки на сообщения
@@ -242,6 +248,8 @@ cp deploy/sayr-gorets-collect.service deploy/sayr-gorets-collect.timer \
 systemctl daemon-reload
 systemctl enable --now sayr-gorets-collect.timer
 systemctl enable --now sayr-gorets-digest.timer      # после того как владелец написал сборщику
+cp deploy/sayr-gorets-api.service /etc/systemd/system/ && systemctl daemon-reload
+systemctl enable --now sayr-gorets-api.service       # если данные нужны другим проектам
 ```
 
 В шапке каждого unit-файла — как его установить и проверить. Службы
@@ -278,6 +286,8 @@ sayr-gorets-collect.service` или дождаться таймера). Новы
 | `gorets backfill --since ГГГГ-ММ-ДД [--limit N]` | Догрузка истории через API порциями с продолжением |
 | `gorets import-export result.json [--chat-id N] [--no-forum]` | Импорт выгрузки Telegram Desktop |
 | `gorets digest [--week ГГГГ-Wнн] [--dry-run] [--no-send] [--resend]` | Разбор недели (по умолчанию прошлой) и отчёт владельцу; `--dry-run` печатает объём, число кусков и оценку цены, не вызывая API; `--no-send` собирает отчёт без отправки; `--resend` отправляет уже собранный отчёт ещё раз |
+| `gorets extract [--extractor имя] [--since ГГГГ-ММ-ДД] [--limit N] [--dry-run]` | Прогнать извлекатели из `gorets.toml` по новым сообщениям фидов |
+| `gorets api [--host] [--port]` | HTTP API для других проектов |
 | `gorets forget-author <tg_user_id>` | Удалить всё, что написал автор (по тому же HMAC) |
 | `gorets forget-message <чат> <id>` | Удалить одно сообщение (чат — username или id) |
 | `gorets stats` | Что в базе, итоги недель, последние прогоны |
@@ -317,6 +327,9 @@ sayr-gorets-collect.service` или дождаться таймера). Новы
 | `GORETS_TIMEZONE` | `Asia/Tashkent` | Часовой пояс суток и недель |
 | `GORETS_DELIVERY`, `GORETS_DELIVERY_MAX_PARTS` | `auto`, `4` | Частями до 4096 знаков или файлом `.md` |
 | `ANTHROPIC_API_KEY` | — | Ключ Claude |
+| `GORETS_CONFIG` | `gorets.toml` | Файл фидов и извлекателей |
+| `GORETS_EXTRACT_MODEL` | `claude-haiku-4-5-20251001` | Модель извлекателей |
+| `GORETS_API_TOKEN`, `GORETS_API_HOST`, `GORETS_API_PORT` | —, `127.0.0.1`, `8765` | HTTP API |
 
 ## Разбор недели
 
@@ -396,6 +409,72 @@ Sayr и заведение черновиков мест без переделк
 `slug` в отчёте — только из каталога (несуществующие модель назвать может,
 программа их обнуляет). `kind` состояния: `snow`, `water`, `road`,
 `closure`, `danger`, `weather`, `other`.
+
+## Фиды, извлекатели и API для других проектов
+
+Сервис умеет отдавать собранное другим проектам Sayr на том же VPS,
+например агрегатору туров. Три понятия:
+
+**Фид** — именованный выбор сообщений: чат плюс ветки (названия или id).
+Описывается в [`gorets.toml`](gorets.toml), файл хранится в репозитории.
+У фида с `keep_contacts = true` текст сообщений хранится как есть: в
+коммерческих ветках (афиши, объявления) телефон и ник организатора — часть
+предложения, а не личные данные. Во всех остальных ветках очистка работает
+как раньше.
+
+```toml
+[feeds.afisha]
+chat = "gorets_uzb"
+topics = ["Афиши"]
+keep_contacts = true
+```
+
+**Извлекатель** — инструкция модели и JSON-схема, привязанные к фиду. Раз в
+день (вторым шагом службы сбора) каждый новый текст фида уходит в Message
+Batches API одним запросом, модель решает, по теме ли сообщение
+(`relevant`), и возвращает структуру по схеме. Результат хранится в
+таблице `extractions` бессрочно, даже после удаления сырого сообщения по
+сроку, повторно сообщение не разбирается. Первый извлекатель —
+`afisha_tour`: название, организатор, контакт, место, даты, цена,
+сложность, что включено. Новый вид извлечения — ещё одна секция в
+`gorets.toml`, без правки кода.
+
+```bash
+.venv/bin/gorets extract --dry-run            # сколько сообщений ждёт и оценка цены
+.venv/bin/gorets extract --extractor afisha_tour --since 2026-01-01
+```
+
+**HTTP API** — FastAPI, только чтение, слушает `127.0.0.1:8765`, токен
+`GORETS_API_TOKEN` в заголовке `Authorization: Bearer …` или
+`X-API-Token`. Служба `deploy/sayr-gorets-api.service`.
+
+| Запрос | Что отдаёт |
+|---|---|
+| `GET /health` | без токена, для мониторинга |
+| `GET /feeds` | описанные фиды |
+| `GET /feeds/{name}/messages?after=&since=&until=&q=&limit=` | сообщения фида по возрастанию `msg_id`; `after` — курсор |
+| `GET /extractors` | извлекатели, их схемы и счётчики |
+| `GET /extractions/{name}?after=&since=&until=&status=&limit=` | результаты извлекателя; `after` — курсор по `id`, `status` = `ok` (по умолчанию), `skipped`, `error`, `all` |
+| `GET /messages/{chat}/{msg_id}` | одно сообщение |
+| `GET /digests`, `GET /digests/{week}?format=json\|md` | итоги недель |
+
+Ответы списков: `{"items": [...], "next_cursor": …, "has_more": true}`.
+Потребитель запоминает `next_cursor` и в следующий раз передаёт его в
+`after` — так ничего не теряется и не дублируется. У каждого сообщения и
+извлечения есть `link` на оригинал в Telegram.
+
+Пример потребителя на FastAPI с `httpx`:
+
+```python
+import httpx
+
+GORETS = httpx.Client(base_url="http://127.0.0.1:8765",
+                      headers={"Authorization": f"Bearer {GORETS_API_TOKEN}"})
+
+def new_tours(cursor: int | None) -> tuple[list[dict], int | None]:
+    page = GORETS.get("/extractions/afisha_tour", params={"after": cursor, "limit": 200}).json()
+    return page["items"], page["next_cursor"]   # item["data"] — тур по схеме, item["link"] — пост
+```
 
 ## Цена в месяц
 

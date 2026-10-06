@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     delivery: str = "auto"  # auto | parts | file
     delivery_max_parts: int = 4
 
+    # --- Фиды, извлекатели, API для других проектов --------------------------
+    # Описание фидов и извлекателей (файл в репозитории).
+    config_file: Path = Path("gorets.toml")
+    # Модель извлекателей по умолчанию (куски сообщений фидов, батчем).
+    extract_model: str = "claude-haiku-4-5-20251001"
+    # Токен для HTTP API: без него API не запускается. Заголовок
+    # `Authorization: Bearer …` или `X-API-Token`.
+    api_token: str | None = None
+    api_host: str = "127.0.0.1"
+    api_port: int = 8765
+
     log_level: str = "INFO"
 
     @property

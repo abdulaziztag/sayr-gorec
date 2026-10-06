@@ -7,12 +7,12 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Engine, delete, func, select, text, update
+from sqlalchemy import Engine, and_, delete, exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from gorets.db import make_session_factory
-from gorets.models import Chat, Digest, Message, Run, SyncState
+from gorets.models import Chat, Digest, ExtractBatch, Extraction, Message, Run, SyncState
 
 # Поля сообщения, которые обновляются при повторной записи. Время сбора не
 # трогаем: оно отвечает на вопрос «когда это впервые попало к нам».
@@ -249,6 +249,149 @@ class Repository:
         with self.session() as s:
             return list(
                 s.execute(select(Digest).order_by(Digest.week.desc()).limit(limit)).scalars()
+            )
+
+    # --- фиды и извлечения --------------------------------------------------------
+
+    def get_chat(self, chat_id: int) -> Chat | None:
+        with self.session() as s:
+            return s.get(Chat, chat_id)
+
+    @staticmethod
+    def _topic_filter(topics: Sequence[str | int]):
+        if not topics:
+            return None
+        ids = [t for t in topics if isinstance(t, int)]
+        titles = [t.strip().lower() for t in topics if isinstance(t, str)]
+        clauses = []
+        if ids:
+            clauses.append(Message.topic_id.in_(ids))
+        if titles:
+            clauses.append(func.lower(func.trim(Message.topic_title)).in_(titles))
+        return or_(*clauses)
+
+    def feed_messages(
+        self,
+        chat_id: int,
+        topics: Sequence[str | int] = (),
+        *,
+        after_id: int | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        q: str | None = None,
+        limit: int = 100,
+    ) -> list[Message]:
+        """Сообщения фида по возрастанию id: курсор потребителя — последний msg_id."""
+        stmt = select(Message).where(Message.chat_id == chat_id)
+        topic_filter = self._topic_filter(topics)
+        if topic_filter is not None:
+            stmt = stmt.where(topic_filter)
+        if after_id is not None:
+            stmt = stmt.where(Message.msg_id > after_id)
+        if since is not None:
+            stmt = stmt.where(Message.date >= since)
+        if until is not None:
+            stmt = stmt.where(Message.date < until)
+        if q:
+            stmt = stmt.where(Message.text.ilike(f"%{q}%"))
+        stmt = stmt.order_by(Message.msg_id).limit(limit)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def messages_without_extraction(
+        self,
+        extractor: str,
+        chat_id: int,
+        topics: Sequence[str | int] = (),
+        *,
+        since: datetime | None = None,
+        limit: int = 500,
+    ) -> list[Message]:
+        """Сообщения фида с текстом, по которым извлекатель ещё не проходил."""
+        done = exists().where(
+            and_(
+                Extraction.extractor == extractor,
+                Extraction.chat_id == Message.chat_id,
+                Extraction.msg_id == Message.msg_id,
+            )
+        )
+        stmt = (
+            select(Message)
+            .where(Message.chat_id == chat_id, Message.text != "", ~done)
+            .order_by(Message.msg_id)
+            .limit(limit)
+        )
+        topic_filter = self._topic_filter(topics)
+        if topic_filter is not None:
+            stmt = stmt.where(topic_filter)
+        if since is not None:
+            stmt = stmt.where(Message.date >= since)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def save_extractions(self, rows: Sequence[dict[str, Any]]) -> int:
+        if not rows:
+            return 0
+        stmt = insert(Extraction).values(list(rows))
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_extractions_message",
+            set_={
+                name: getattr(stmt.excluded, name)
+                for name in ("status", "data", "error", "model", "input_tokens", "output_tokens")
+            },
+        )
+        with self.session() as s, s.begin():
+            return int(s.execute(stmt).rowcount or 0)
+
+    def list_extractions(
+        self,
+        extractor: str,
+        *,
+        after_id: int | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        status: str | None = "ok",
+        limit: int = 100,
+    ) -> list[Extraction]:
+        stmt = select(Extraction).where(Extraction.extractor == extractor)
+        if status:
+            stmt = stmt.where(Extraction.status == status)
+        if after_id is not None:
+            stmt = stmt.where(Extraction.id > after_id)
+        if since is not None:
+            stmt = stmt.where(Extraction.message_date >= since)
+        if until is not None:
+            stmt = stmt.where(Extraction.message_date < until)
+        stmt = stmt.order_by(Extraction.id).limit(limit)
+        with self.session() as s:
+            return list(s.execute(stmt).scalars())
+
+    def extraction_counts(self) -> list[dict[str, Any]]:
+        with self.session() as s:
+            rows = s.execute(
+                select(Extraction.extractor, Extraction.status, func.count())
+                .group_by(Extraction.extractor, Extraction.status)
+                .order_by(Extraction.extractor)
+            ).all()
+        return [{"extractor": e, "status": st, "count": int(n)} for e, st, n in rows]
+
+    def add_extract_batch(self, extractor: str, batch_id: str, items: dict[str, Any]) -> None:
+        with self.session() as s, s.begin():
+            s.add(ExtractBatch(extractor=extractor, batch_id=batch_id, items=items))
+
+    def pending_extract_batches(self, extractor: str | None = None) -> list[ExtractBatch]:
+        stmt = select(ExtractBatch).where(ExtractBatch.status == "pending")
+        if extractor:
+            stmt = stmt.where(ExtractBatch.extractor == extractor)
+        with self.session() as s:
+            return list(s.execute(stmt.order_by(ExtractBatch.id)).scalars())
+
+    def finish_extract_batch(self, batch_id: str, status: str = "done") -> None:
+        with self.session() as s, s.begin():
+            s.execute(
+                update(ExtractBatch)
+                .where(ExtractBatch.batch_id == batch_id)
+                .values(status=status, finished_at=func.now())
             )
 
     # --- статистика ---------------------------------------------------------------

@@ -183,3 +183,23 @@ def test_import_requires_secret_and_chat_id(tmp_path: Path, repo: Repository) ->
         import_export(no_id, repo, Settings(_env_file=None, author_hmac_secret="s"))
     result = import_export(no_id, repo, Settings(_env_file=None, author_hmac_secret="s"), chat_id=5)
     assert result.seen == 0 and result.chat_id == 5
+
+
+def test_import_keeps_contacts_in_commercial_topic() -> None:
+    conv = ExportConverter(
+        chat_id=1234567890,
+        hasher=lambda kind, pid: author_hash(SECRET, pid, kind),
+        cleaner=TextCleaner(KEEP),
+        keep=KEEP,
+        tz=ZoneInfo("Asia/Tashkent"),
+        keep_contacts=lambda topic_id, title: title == "Выходы и сборы",
+    )
+    rows = {}
+    for item in iter_export_messages(FIXTURE):
+        row = conv.convert(item)
+        if row is not None:
+            rows[row["msg_id"]] = row
+    assert "+998 90 123 45 67" in rows[101]["text"]
+    assert "@ivan_petrov" in rows[101]["text"]
+    assert rows[102]["text"] == "Я с вами! Мой номер 93 765 43 21"
+    assert "998" not in rows[116]["text"]  # General — контакты стираются

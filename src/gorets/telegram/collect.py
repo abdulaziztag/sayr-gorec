@@ -21,6 +21,7 @@ from telethon.tl.functions.messages import GetForumTopicsByIDRequest, GetForumTo
 from gorets.anonymize import author_hash
 from gorets.cleaning import TextCleaner
 from gorets.config import Settings
+from gorets.feeds import load_project_config
 from gorets.storage import Repository, normalize_chat_id
 from gorets.telegram.convert import GENERAL_TOPIC_ID, GENERAL_TOPIC_TITLE, ChatInfo, message_to_row
 
@@ -152,6 +153,11 @@ async def harvest(
         return author_hash(secret, peer_id, kind)
 
     cleaner = TextCleaner(settings.mention_keep_set)
+    project = load_project_config(settings.config_file)
+
+    def keep_contacts(topic_id: int | None, topic_title: str | None) -> bool:
+        return project.keeps_contacts(chat.chat_id, chat.username, topic_id, topic_title)
+
     result = HarvestResult()
     batch: list[dict[str, Any]] = []
 
@@ -191,6 +197,7 @@ async def harvest(
                 hasher=hasher,
                 cleaner=cleaner,
                 fwd_title=_forward_title(msg),
+                keep_contacts=keep_contacts,
             )
             if row is not None:
                 batch.append(row)
