@@ -5,10 +5,10 @@
 #   systemctl daemon-reload
 #   systemctl enable --now sayr-gorets-api.service
 # Проверка:
-#   curl -s http://127.0.0.1:8765/health
-#   curl -s -H "Authorization: Bearer $GORETS_API_TOKEN" http://127.0.0.1:8765/feeds
+#   curl -s http://127.0.0.1:8790/health
+#   curl -s -H "Authorization: Bearer $GORETS_API_TOKEN" http://127.0.0.1:8790/feeds
 #   journalctl -u sayr-gorets-api.service -n 50
-# Адрес и порт — GORETS_API_HOST / GORETS_API_PORT в .env (по умолчанию 127.0.0.1:8765).
+# Адрес и порт — GORETS_API_HOST / GORETS_API_PORT в .env (по умолчанию 127.0.0.1:8790).
 
 [Unit]
 Description=Sayr: HTTP API сборщика форума «ГОРЕЦ»

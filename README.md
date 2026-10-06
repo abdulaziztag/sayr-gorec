@@ -347,7 +347,7 @@ sayr-gorets-collect.service` или дождаться таймера). Новы
 | `ANTHROPIC_API_KEY` | — | Ключ Claude |
 | `GORETS_CONFIG` | `gorets.toml` | Файл фидов и извлекателей |
 | `GORETS_EXTRACT_MODEL` | `claude-haiku-4-5-20251001` | Модель извлекателей |
-| `GORETS_API_TOKEN`, `GORETS_API_HOST`, `GORETS_API_PORT` | —, `127.0.0.1`, `8765` | HTTP API |
+| `GORETS_API_TOKEN`, `GORETS_API_HOST`, `GORETS_API_PORT` | —, `127.0.0.1`, `8790` | HTTP API |
 
 ## Разбор недели
 
@@ -467,7 +467,7 @@ Batches API одним запросом, модель решает, по тем�
 .venv/bin/gorets extract --extractor afisha_tour --since 2026-01-01
 ```
 
-**HTTP API** — FastAPI, только чтение, слушает `127.0.0.1:8765`, токен
+**HTTP API** — FastAPI, только чтение, слушает `127.0.0.1:8790`, токен
 `GORETS_API_TOKEN` в заголовке `Authorization: Bearer …` или
 `X-API-Token`. Служба `deploy/sayr-gorets-api.service`.
 
@@ -499,7 +499,7 @@ Batches API одним запросом, модель решает, по тем�
 ```python
 import httpx
 
-GORETS = httpx.Client(base_url="http://127.0.0.1:8765",
+GORETS = httpx.Client(base_url="http://127.0.0.1:8790",
                       headers={"Authorization": f"Bearer {GORETS_API_TOKEN}"})
 
 def new_tours(cursor: int | None) -> tuple[list[dict], int | None]:

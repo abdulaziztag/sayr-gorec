@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     # `Authorization: Bearer …` или `X-API-Token`.
     api_token: str | None = None
     api_host: str = "127.0.0.1"
-    api_port: int = 8765
+    api_port: int = 8790
 
     log_level: str = "INFO"
 
