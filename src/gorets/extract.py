@@ -215,13 +215,11 @@ def run_extract(
         raise ExtractError("Нет клиента Claude: задайте ANTHROPIC_API_KEY")
 
     for extractor in selected:
-        feed = project.feed(extractor.feed)
-        chat_id = repo.resolve_chat_id(feed.chat)
-        entry: dict[str, Any] = {"extractor": extractor.name, "feed": feed.name}
-        if chat_id is None:
-            entry["note"] = f"чат {feed.chat} ещё не собран"
-            report.extractors.append(entry)
-            continue
+        entry: dict[str, Any] = {"extractor": extractor.name, "feeds": list(extractor.feeds)}
+        entry.update(
+            {"candidates": 0, "saved": 0, "ok": 0, "skipped": 0, "error": 0, "cost_usd": 0.0}
+        )
+        notes: list[str] = []
 
         # Сначала — батчи, не забранные в прошлый раз.
         if not dry_run:
@@ -242,10 +240,23 @@ def run_extract(
                     report.cost_usd += result["cost_usd"]
                     entry.setdefault("resumed", []).append({"batch_id": pending.batch_id, **result})
 
-        candidates = repo.messages_without_extraction(
-            extractor.name, chat_id, feed.topics, since=since, limit=limit or 500
-        )
+        candidates: list[Message] = []
+        for feed_name in extractor.feeds:
+            feed = project.feed(feed_name)
+            chat_id = repo.resolve_chat_id(feed.chat)
+            if chat_id is None:
+                notes.append(f"чат {feed.chat} ещё не собран")
+                continue
+            candidates.extend(
+                repo.messages_without_extraction(
+                    extractor.name, chat_id, feed.topics, since=since, limit=limit or 500
+                )
+            )
+        if limit:
+            candidates = candidates[:limit]
         entry["candidates"] = len(candidates)
+        if notes:
+            entry["note"] = "; ".join(notes)
         if dry_run or not candidates:
             if candidates:
                 model = extractor.model or settings.extract_model

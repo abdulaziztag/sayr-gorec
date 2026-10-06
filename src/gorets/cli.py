@@ -263,7 +263,8 @@ def cmd_extract(args: argparse.Namespace, settings: Settings) -> int:
         },
     )
     for entry in report.extractors:
-        line = f"{entry['extractor']} ({entry['feed']}): кандидатов {entry.get('candidates', 0)}"
+        feeds = ", ".join(entry["feeds"])
+        line = f"{entry['extractor']} ({feeds}): кандидатов {entry.get('candidates', 0)}"
         if "estimate_usd" in entry:
             line += f", оценка ≈${entry['estimate_usd']:.2f}"
         if "saved" in entry:

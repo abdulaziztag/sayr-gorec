@@ -31,13 +31,17 @@ def seed(repo: Repository) -> None:
                 2,
                 text="Тур на Бельдерсай 12.10, 300 000 сум, +998901234567",
                 topic_id=AFISHA,
-                topic_title="Афиши",
+                topic_title="АФИША ПОХОДОВ",
             ),
             _row(
-                3, text="А сколько идти?", topic_id=AFISHA, topic_title="Афиши", reply_to_msg_id=2
+                3,
+                text="А сколько идти?",
+                topic_id=AFISHA,
+                topic_title="АФИША ПОХОДОВ",
+                reply_to_msg_id=2,
             ),
-            _row(4, text="", topic_id=AFISHA, topic_title="Афиши", media_type="photo"),
-            _row(5, text="Выезд в Чимган 19.10", topic_id=AFISHA, topic_title="афиши "),
+            _row(4, text="", topic_id=AFISHA, topic_title="АФИША ПОХОДОВ", media_type="photo"),
+            _row(5, text="Выезд в Чимган 19.10", topic_id=AFISHA, topic_title="афиша походов "),
         ]
     )
 
@@ -127,7 +131,7 @@ def test_feed_messages_with_cursor_and_filters(repo: Repository) -> None:
 def test_run_extract_stores_results_and_skips_done(repo: Repository) -> None:
     seed(repo)
     gateway = ExtractGateway()
-    report = run(repo, gateway)
+    report = run(repo, gateway, names=["afisha_tour"])
     entry = report.extractors[0]
     assert entry["candidates"] == 3 and entry["ok"] == 2 and entry["skipped"] == 1
     assert report.cost_usd > 0
@@ -138,15 +142,18 @@ def test_run_extract_stores_results_and_skips_done(repo: Repository) -> None:
     ok = repo.list_extractions("afisha_tour")
     assert [e.msg_id for e in ok] == [2, 5]
     assert ok[0].data["price"] == 300000
-    assert ok[0].topic_title == "Афиши"
+    assert ok[0].topic_title == "АФИША ПОХОДОВ"
     assert repo.list_extractions("afisha_tour", status="skipped")[0].msg_id == 3
     # Повтор ничего не отправляет: всё уже извлечено.
-    report = run(repo, gateway)
+    report = run(repo, gateway, names=["afisha_tour"])
     assert report.extractors[0]["candidates"] == 0 and len(gateway.submitted) == 1
     # dry-run без ключа: только оценка.
-    repo.upsert_messages([_row(6, text="Новый тур", topic_id=AFISHA, topic_title="Афиши")])
+    repo.upsert_messages([_row(6, text="Новый тур", topic_id=AFISHA, topic_title="АФИША ПОХОДОВ")])
     report = run(repo, None, dry_run=True)
     assert report.extractors[0]["candidates"] == 1 and report.extractors[0]["estimate_usd"] > 0
+    # Извлекатель на несколько фидов: чат «Горняшки» ещё не собран — замечание, не ошибка.
+    cond = next(e for e in report.extractors if e["extractor"] == "trail_condition")
+    assert "hikinguz" in cond["note"] and cond["candidates"] == 0
 
 
 def test_pending_batch_is_collected_next_time(repo: Repository) -> None:
@@ -158,12 +165,28 @@ def test_pending_batch_is_collected_next_time(repo: Repository) -> None:
         clock["t"] += s
 
     with pytest.raises(ExtractError, match="не завершились"):
-        run_extract(settings(), repo, PROJECT, gateway, sleep=sleep, clock=lambda: clock["t"])
+        run_extract(
+            settings(),
+            repo,
+            PROJECT,
+            gateway,
+            names=["afisha_tour"],
+            sleep=sleep,
+            clock=lambda: clock["t"],
+        )
     assert [b.batch_id for b in repo.pending_extract_batches()] == ["xb_1"]
     assert repo.list_extractions("afisha_tour") == []
 
     gateway.ended = True
-    report = run_extract(settings(), repo, PROJECT, gateway, sleep=sleep, clock=lambda: clock["t"])
+    report = run_extract(
+        settings(),
+        repo,
+        PROJECT,
+        gateway,
+        names=["afisha_tour"],
+        sleep=sleep,
+        clock=lambda: clock["t"],
+    )
     assert len(gateway.submitted) == 1
     assert report.extractors[0]["resumed"][0]["ok"] == 2
     assert repo.pending_extract_batches() == []
@@ -172,7 +195,7 @@ def test_pending_batch_is_collected_next_time(repo: Repository) -> None:
 
 def test_extractions_outlive_messages(repo: Repository) -> None:
     seed(repo)
-    run(repo, ExtractGateway())
+    run(repo, ExtractGateway(), names=["afisha_tour"])
     repo.delete_older_than(0, datetime.now(UTC) + timedelta(days=1))
     assert repo.count_messages(CHAT) == 0
     assert len(repo.list_extractions("afisha_tour")) == 2
@@ -180,7 +203,7 @@ def test_extractions_outlive_messages(repo: Repository) -> None:
 
 def test_api_endpoints(repo: Repository) -> None:
     seed(repo)
-    run(repo, ExtractGateway())
+    run(repo, ExtractGateway(), names=["afisha_tour"])
     repo.save_digest(
         "2026-W40",
         period_start=datetime(2026, 9, 28, tzinfo=UTC),
@@ -195,7 +218,7 @@ def test_api_endpoints(repo: Repository) -> None:
     assert client.get("/feeds", headers={"Authorization": "Bearer wrong"}).status_code == 401
     auth = {"Authorization": "Bearer t0k"}
     names = [f["name"] for f in client.get("/feeds", headers=auth).json()["items"]]
-    assert names == ["afisha", "conditions"]
+    assert names[0] == "afisha" and "dispatch_hikinguz" in names
 
     page = client.get("/feeds/afisha/messages", params={"limit": 2}, headers=auth).json()
     assert [m["msg_id"] for m in page["items"]] == [2, 3]

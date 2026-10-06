@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     tg_session: str | None = None
     # Чаты для сбора через запятую: username или числовой id. Чат, которого ещё
     # нет в базе, при первом сборе читается с даты `initial_since`.
-    chats: str = "gorets_uzb,gornyazhka"
+    chats: str = "gorets_uzb,hikinguz"
     # С какой даты (по Ташкенту) читать новый чат при первом сборе.
     initial_since: date = date(2026, 1, 1)
     # Кому слать отчёт: @username или числовой id владельца.

@@ -1,28 +1,74 @@
 # Фиды и извлекатели sayr-gorets (путь к файлу — GORETS_CONFIG, по умолчанию gorets.toml).
 # Файл хранится в репозитории: правки — коммитом, на сервер приедут с update.sh.
 #
-# Фид — чат плюс ветки (названия или id). Пустой topics — весь чат.
-# keep_contacts = true — в этих ветках телефоны и ники не стираются:
-# это коммерческие предложения, а не личная переписка.
+# Фид — чат плюс ветки. В topics — начала названий веток (регистр не важен,
+# длинные названия можно обрезать) или числовые id. Пустой topics — весь чат.
+# keep_contacts = true — телефоны и ники в этих ветках не стираются: это
+# коммерческие предложения, а не личная переписка.
+
+# --- «ГОРЕЦ» ФОРУМ, @gorets_uzb -------------------------------------------
 
 [feeds.afisha]
 chat = "gorets_uzb"
-topics = ["Афиши"]
-description = "Афиши выходов и туров"
+topics = ["АФИША ПОХОДОВ"]
+description = "Афиши походов и туров"
 keep_contacts = true
 
-[feeds.conditions]
+[feeds.companions]
 chat = "gorets_uzb"
-topics = []
-description = "Весь форум: для разбора состояния троп"
+topics = ["ПОИСК ПОПУТЧИКОВ"]
+description = "Поиск попутчиков"
 
-# Извлекатель — инструкция и JSON-схема, которые прогоняются по каждому
-# новому сообщению фида (Message Batches, вдвое дешевле). Результат хранится
-# бессрочно и отдаётся через API: GET /extractions/afisha_tour.
-# Модель сама решает, относится ли сообщение к теме (relevant = false — пропуск).
+[feeds.dispatch]
+chat = "gorets_uzb"
+topics = ["ДИСПЕТЧЕРСКАЯ"]
+description = "Диспетчерская: кто куда ушёл, состояние на месте"
+
+[feeds.routes]
+chat = "gorets_uzb"
+topics = ["Описания и нюансы популярных марш"]
+description = "Описания и нюансы популярных маршрутов"
+
+[feeds.weather]
+chat = "gorets_uzb"
+topics = ["ПРОГНОЗ ПОГОДЫ"]
+description = "Прогноз погоды"
+
+[feeds.chat]
+chat = "gorets_uzb"
+topics = ["ЧАТ"]
+description = "Общий чат форума"
+
+# --- Горняшка.uz, @hikinguz ------------------------------------------------
+
+[feeds.companions_hikinguz]
+chat = "hikinguz"
+topics = ["Кто куда"]
+description = "Кто куда? (поиск попутчиков)"
+
+[feeds.dispatch_hikinguz]
+chat = "hikinguz"
+topics = ["Диспетчерская"]
+description = "Диспетчерская: кто куда ушёл и когда вернулся"
+
+[feeds.reports_hikinguz]
+chat = "hikinguz"
+topics = ["Блоги и отчёты о походах"]
+description = "Отчёты о походах"
+
+[feeds.tracks_hikinguz]
+chat = "hikinguz"
+topics = ["Файло и трекохранилище"]
+description = "Треки и файлы маршрутов"
+
+# --- Извлекатели -------------------------------------------------------------
+# Инструкция и JSON-схема прогоняются по каждому новому сообщению фидов
+# (Message Batches, вдвое дешевле). Результат хранится бессрочно и отдаётся
+# через API: GET /extractions/<имя>. Модель сама решает, относится ли
+# сообщение к теме (relevant = false — пропуск).
 
 [extractors.afisha_tour]
-feed = "afisha"
+feeds = ["afisha"]
 description = "Тур или выход из афиши"
 # model = "claude-haiku-4-5-20251001"   # по умолчанию GORETS_EXTRACT_MODEL
 prompt = """
@@ -54,6 +100,59 @@ schema = '''
   },
   "required": ["title", "organizer", "contact", "place", "region", "date_start", "date_end",
                "days", "price", "currency", "difficulty", "includes", "transport", "summary"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.companion_request]
+feeds = ["companions", "companions_hikinguz"]
+description = "Объявление о поиске попутчиков"
+prompt = """
+Сообщение из ветки поиска попутчиков. Если кто-то ищет компанию в конкретный
+поход или предлагает присоединиться — извлеки по схеме. Ответы, уточнения и
+обсуждения без собственного плана — relevant = false. Даты в формате
+ГГГГ-ММ-ДД, если год не указан — ближайший будущий. Контактов в тексте нет
+(они заменены заглушками) — не выдумывай.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "place":       {"type": "string"},
+    "date_start":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_end":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "group_size":  {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "has_car":     {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+    "difficulty":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "summary":     {"type": "string"}
+  },
+  "required": ["place", "date_start", "date_end", "group_size", "has_car", "difficulty", "summary"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.trail_condition]
+feeds = ["dispatch", "dispatch_hikinguz", "chat", "reports_hikinguz"]
+description = "Состояние тропы, дороги, погоды в конкретном месте"
+prompt = """
+Сообщение туристического форума. Если в нём есть сведения о текущем состоянии
+конкретного места — снег, лавины, вода и броды, дорога и подъезд, закрытия и
+пропуска, опасности, погода на месте — извлеки по схеме. Планы, вопросы и
+общие рассуждения без фактов с места — relevant = false. kind: snow, water,
+road, closure, danger, weather, other. observed_on — дата наблюдения, если
+понятна из текста, в формате ГГГГ-ММ-ДД, иначе null.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "place":       {"type": "string"},
+    "kind":        {"type": "string", "enum": ["snow", "water", "road", "closure", "danger", "weather", "other"]},
+    "text":        {"type": "string"},
+    "observed_on": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "severity":    {"type": "string", "enum": ["info", "caution", "danger"]}
+  },
+  "required": ["place", "kind", "text", "observed_on", "severity"],
   "additionalProperties": false
 }
 '''

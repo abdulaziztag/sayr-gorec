@@ -7,21 +7,28 @@ from gorets.feeds import FeedConfigError, load_project_config, parse_project_con
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_example_config_loads() -> None:
+def test_project_config_loads() -> None:
     config = load_project_config(ROOT / "gorets.toml")
-    assert set(config.feeds) == {"afisha", "conditions"}
+    assert {"afisha", "dispatch", "companions_hikinguz", "tracks_hikinguz"} <= set(config.feeds)
     afisha = config.feeds["afisha"]
     assert afisha.keep_contacts is True
-    assert afisha.matches(1, "gorets_uzb", 500, "афиши")
+    assert afisha.matches(1, "gorets_uzb", 500, "Афиша походов")
     assert not afisha.matches(1, "gorets_uzb", 1, "General")
-    assert not afisha.matches(2, "other", 500, "Афиши")
-    assert config.feeds["conditions"].matches(1, "gorets_uzb", 999, None)
+    assert not afisha.matches(2, "hikinguz", 500, "АФИША ПОХОДОВ")
+    # Обрезанное название ветки совпадает по началу.
+    routes = config.feeds["routes"]
+    assert routes.matches(1, "gorets_uzb", 7, "Описания и нюансы популярных маршрутов и не только")
+    assert config.feeds["dispatch_hikinguz"].matches(
+        2, "hikinguz", 9, "Диспетчерская (пишем кто куда ушёл и когда вернулся)"
+    )
     ext = config.extractors["afisha_tour"]
-    assert ext.feed == "afisha"
+    assert ext.feeds == ("afisha",)
     assert ext.schema["type"] == "object"
     assert "title" in ext.schema["properties"]
-    assert config.keeps_contacts(1, "gorets_uzb", 500, "Афиши")
+    assert config.extractors["trail_condition"].feeds[:2] == ("dispatch", "dispatch_hikinguz")
+    assert config.keeps_contacts(1, "gorets_uzb", 500, "АФИША ПОХОДОВ")
     assert not config.keeps_contacts(1, "gorets_uzb", 1, "General")
+    assert not config.keeps_contacts(2, "hikinguz", 3, "Кто куда ? (поиск попутчиков)")
 
 
 def test_missing_file_is_empty_config(tmp_path: Path) -> None:
@@ -36,6 +43,10 @@ def test_chat_by_id_and_topic_by_id() -> None:
     )
     assert config.feeds["x"].matches(1234567890, None, 500, None)
     assert not config.feeds["x"].matches(1234567890, None, 501, "500")
+    by_title = parse_project_config({"feeds": {"y": {"chat": "c", "topics": ["чат"]}}}, Path("."))
+    assert by_title.feeds["y"].matches(1, "c", 2, "ЧАТ")
+    assert by_title.feeds["y"].matches(1, "c", 2, "Чат про снаряжение")
+    assert not by_title.feeds["y"].matches(1, "c", 2, "Общий чат")
 
 
 def test_validation_errors(tmp_path: Path) -> None:
@@ -44,6 +55,11 @@ def test_validation_errors(tmp_path: Path) -> None:
     with pytest.raises(FeedConfigError, match="не описан"):
         parse_project_config(
             {"extractors": {"e": {"feed": "x", "prompt": "p", "schema": "{}"}}}, tmp_path
+        )
+    with pytest.raises(FeedConfigError, match="нужны feed"):
+        parse_project_config(
+            {"feeds": {"x": {"chat": "c"}}, "extractors": {"e": {"prompt": "p", "schema": "{}"}}},
+            tmp_path,
         )
     with pytest.raises(FeedConfigError, match="объект"):
         parse_project_config(

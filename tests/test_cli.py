@@ -93,7 +93,7 @@ def test_collect_without_session_fails_cleanly(env: Path, capsys) -> None:
 
 def test_extract_dry_run_cli(env: Path, repo: Repository, capsys) -> None:
     repo.upsert_chat(CHAT, username="gorets_uzb", title="ГОРЕЦ", is_forum=True)
-    repo.upsert_messages([_row(1, text="Тур", topic_id=500, topic_title="Афиши")])
+    repo.upsert_messages([_row(1, text="Тур", topic_id=500, topic_title="АФИША ПОХОДОВ")])
     assert cli.main(["--env-file", str(env), "extract", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "afisha_tour (afisha): кандидатов 1" in out

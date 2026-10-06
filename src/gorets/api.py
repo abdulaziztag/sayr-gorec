@@ -152,7 +152,7 @@ def create_app(settings: Settings, repo: Repository, project: ProjectConfig) -> 
             "items": [
                 {
                     "name": e.name,
-                    "feed": e.feed,
+                    "feeds": list(e.feeds),
                     "description": e.description,
                     "model": e.model or settings.extract_model,
                     "schema": e.schema,

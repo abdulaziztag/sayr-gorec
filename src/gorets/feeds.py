@@ -23,7 +23,7 @@ class FeedConfigError(ValueError):
 class FeedConfig:
     name: str
     chat: str  # username без @ или числовой id, как в GORETS_CHATS
-    topics: tuple[str | int, ...] = ()  # названия или id веток; пусто — весь чат
+    topics: tuple[str | int, ...] = ()  # начала названий или id веток; пусто — весь чат
     description: str = ""
     # В коммерческих ветках (афиши, объявления) телефоны и ники — часть
     # предложения, а не личные данные; их не стираем.
@@ -40,11 +40,14 @@ class FeedConfig:
     def topic_matches(self, topic_id: int | None, topic_title: str | None) -> bool:
         if not self.topics:
             return True
+        title = (topic_title or "").strip().lower()
         for wanted in self.topics:
             if isinstance(wanted, int):
                 if topic_id == wanted:
                     return True
-            elif topic_title and topic_title.strip().lower() == wanted.strip().lower():
+            elif title and title.startswith(wanted.strip().lower()):
+                # По началу названия: длинные названия веток Telegram показывает
+                # обрезанными, и точную форму знать необязательно.
                 return True
         return False
 
@@ -57,7 +60,7 @@ class FeedConfig:
 @dataclass(frozen=True)
 class ExtractorConfig:
     name: str
-    feed: str
+    feeds: tuple[str, ...]
     prompt: str
     schema: dict[str, Any]
     description: str = ""
@@ -143,13 +146,18 @@ def parse_project_config(data: dict[str, Any], base_dir: Path) -> ProjectConfig:
             keep_contacts=bool(raw.get("keep_contacts", False)),
         )
     for name, raw in (data.get("extractors") or {}).items():
-        if not isinstance(raw, dict) or not raw.get("feed") or not raw.get("prompt"):
-            raise FeedConfigError(f"Извлекатель {name}: нужны feed и prompt")
-        if raw["feed"] not in config.feeds:
-            raise FeedConfigError(f"Извлекатель {name}: фид {raw['feed']!r} не описан")
+        if not isinstance(raw, dict) or not raw.get("prompt"):
+            raise FeedConfigError(f"Извлекатель {name}: нужны feed (или feeds) и prompt")
+        feeds_raw = raw.get("feeds") or raw.get("feed")
+        feeds = tuple(feeds_raw) if isinstance(feeds_raw, list) else (str(feeds_raw or ""),)
+        if not feeds or not all(feeds):
+            raise FeedConfigError(f"Извлекатель {name}: нужны feed (или feeds) и prompt")
+        for feed_name in feeds:
+            if feed_name not in config.feeds:
+                raise FeedConfigError(f"Извлекатель {name}: фид {feed_name!r} не описан")
         config.extractors[name] = ExtractorConfig(
             name=name,
-            feed=str(raw["feed"]),
+            feeds=tuple(str(f) for f in feeds),
             prompt=str(raw["prompt"]).strip(),
             schema=_schema(name, raw, base_dir),
             description=str(raw.get("description", "")),
