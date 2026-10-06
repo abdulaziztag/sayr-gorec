@@ -23,6 +23,8 @@ import ijson
 from gorets.anonymize import author_hash
 from gorets.cleaning import EMAIL, PHONE, USER, TextCleaner
 from gorets.config import Settings
+from gorets.feeds import load_project_config
+from gorets.fingerprint import text_fingerprint
 from gorets.storage import Repository, as_decimal_coord, chunked
 from gorets.telegram.convert import GENERAL_TOPIC_ID, GENERAL_TOPIC_TITLE, track_type
 
@@ -77,7 +79,7 @@ def parse_peer(value: Any) -> tuple[str, int] | None:
     return m.group(1), int(m.group(2))
 
 
-def flatten_text(text: Any, keep: set[str]) -> str:
+def flatten_text(text: Any, keep: set[str], mask: bool = True) -> str:
     """`text` выгрузки — строка или список строк и сущностей; личное меняем сразу."""
     if text is None:
         return ""
@@ -90,7 +92,9 @@ def flatten_text(text: Any, keep: set[str]) -> str:
             continue
         kind = part.get("type")
         value = str(part.get("text", ""))
-        if kind == "mention":
+        if not mask:
+            parts.append(value)
+        elif kind == "mention":
             name = value.lstrip("@").lower()
             parts.append(value if (name in keep or name.endswith("bot")) else USER)
         elif kind == "mention_name":
@@ -177,7 +181,9 @@ class ExportConverter:
         keep: set[str],
         tz: ZoneInfo,
         is_forum: bool = True,
+        keep_contacts: Callable[[int | None, str | None], bool] | None = None,
     ) -> None:
+        self.keep_contacts = keep_contacts
         self.chat_id = chat_id
         self.hasher = hasher
         self.cleaner = cleaner
@@ -225,9 +231,15 @@ class ExportConverter:
 
         author = parse_peer(item.get("from_id"))
         media_type, file_name, lat, lng, extra = _media(item)
-        text = self.cleaner(flatten_text(item.get("text"), self.keep))
-        if extra:
-            text = f"{text}\n{self.cleaner(extra)}".strip()
+        topic_title = self.topics.get(topic_id) if topic_id is not None else None
+        if self.keep_contacts is not None and self.keep_contacts(topic_id, topic_title):
+            text = flatten_text(item.get("text"), self.keep, mask=False).strip()
+            if extra:
+                text = f"{text}\n{extra}".strip()
+        else:
+            text = self.cleaner(flatten_text(item.get("text"), self.keep))
+            if extra:
+                text = f"{text}\n{self.cleaner(extra)}".strip()
 
         forwarded_from = None
         fwd_peer = parse_peer(item.get("forwarded_from_id"))
@@ -239,7 +251,7 @@ class ExportConverter:
             "msg_id": msg_id,
             "date": _parse_date(item, "date", self.tz),
             "topic_id": topic_id,
-            "topic_title": self.topics.get(topic_id) if topic_id is not None else None,
+            "topic_title": topic_title,
             "reply_to_msg_id": real_reply,
             "author_hash": self.hasher(author[0], author[1]) if author else None,
             "text": text,
@@ -249,6 +261,7 @@ class ExportConverter:
             "lng": as_decimal_coord(lng),
             "forwarded_from": forwarded_from,
             "edited_at": _parse_date(item, "edited", self.tz),
+            "fingerprint": text_fingerprint(text),
         }
 
 
@@ -271,6 +284,13 @@ def import_export(
         raise ValueError("В выгрузке нет id чата — укажите его параметром --chat-id")
     tz = ZoneInfo(settings.timezone)
     keep = settings.mention_keep_set
+    project = load_project_config(settings.config_file)
+    username = None
+    with repo.session() as s:
+        from gorets.models import Chat
+
+        chat_row = s.get(Chat, chat_id)
+        username = chat_row.username if chat_row else None
     converter = ExportConverter(
         chat_id=chat_id,
         hasher=lambda kind, peer_id: author_hash(secret, peer_id, kind),
@@ -278,8 +298,11 @@ def import_export(
         keep=keep,
         tz=tz,
         is_forum=is_forum,
+        keep_contacts=lambda topic_id, title: project.keeps_contacts(
+            chat_id, username, topic_id, title
+        ),
     )
-    repo.upsert_chat(chat_id, username=None, title=meta.name, is_forum=is_forum)
+    repo.upsert_chat(chat_id, username=username, title=meta.name, is_forum=is_forum)
     result = ImportResult(chat_id=chat_id)
 
     def rows() -> Iterator[dict[str, Any]]:

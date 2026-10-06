@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from gorets import __version__
@@ -25,6 +26,8 @@ from gorets.digest.claude import AnthropicGateway, ClaudeError
 from gorets.digest.run import DigestDeps, DigestError, resend_digest, run_digest
 from gorets.digest.weeks import Week, parse_week, previous_week
 from gorets.envfile import append_key, has_key
+from gorets.extract import ExtractError, run_extract
+from gorets.feeds import FeedConfigError, load_project_config
 from gorets.importer import ImportResult, import_export
 from gorets.storage import Repository
 from gorets.telegram.client import TelegramNotConfigured, connect_authorized, login_interactive
@@ -35,6 +38,8 @@ log = logging.getLogger("gorets")
 
 KNOWN_ERRORS = (
     CollectError,
+    ExtractError,
+    FeedConfigError,
     DigestError,
     ClaudeError,
     CatalogError,
@@ -218,6 +223,122 @@ def cmd_digest(args: argparse.Namespace, settings: Settings) -> int:
     return 0
 
 
+def cmd_extract(args: argparse.Namespace, settings: Settings) -> int:
+    repo = make_repo(settings)
+    project = load_project_config(settings.config_file)
+    gateway = None
+    if not args.dry_run and settings.anthropic_api_key:
+        gateway = AnthropicGateway(settings.anthropic_api_key)
+    since = None
+    if args.since:
+        since = (
+            datetime.strptime(args.since, "%Y-%m-%d")
+            .replace(tzinfo=ZoneInfo(settings.timezone))
+            .astimezone(UTC)
+        )
+    run_id = repo.start_run("extract")
+    try:
+        report = run_extract(
+            settings,
+            repo,
+            project,
+            gateway,
+            names=args.extractor or None,
+            since=since,
+            limit=args.limit,
+            dry_run=args.dry_run,
+        )
+    except ExtractError as exc:
+        repo.finish_run(run_id, status="error", error=str(exc))
+        raise
+    except Exception as exc:
+        repo.finish_run(run_id, status="error", error=str(exc))
+        raise
+    repo.finish_run(
+        run_id,
+        status="ok",
+        details={
+            "extractors": report.extractors,
+            "cost_usd": report.cost_usd,
+            "dry_run": args.dry_run,
+        },
+    )
+    for entry in report.extractors:
+        feeds = ", ".join(entry["feeds"])
+        line = f"{entry['extractor']} ({feeds}): кандидатов {entry.get('candidates', 0)}"
+        if "estimate_usd" in entry:
+            line += f", оценка ≈${entry['estimate_usd']:.2f}"
+        if "saved" in entry:
+            line += (
+                f", записано {entry['saved']}: по теме {entry['ok']}, не по теме "
+                f"{entry['skipped']}, ошибок {entry['error']}, ≈${entry['cost_usd']:.3f}"
+            )
+        if entry.get("note"):
+            line += f" — {entry['note']}"
+        print(line)
+    if not args.dry_run:
+        print(f"Итого ≈ ${report.cost_usd:.3f}")
+    return 0
+
+
+def cmd_api(args: argparse.Namespace, settings: Settings) -> int:
+    import uvicorn
+
+    from gorets.api import create_app
+
+    app = create_app(settings, make_repo(settings), load_project_config(settings.config_file))
+    uvicorn.run(
+        app,
+        host=args.host or settings.api_host,
+        port=args.port or settings.api_port,
+        log_level=settings.log_level.lower(),
+    )
+    return 0
+
+
+def cmd_mcp(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.mcp_server import McpNotInstalled, create_server
+
+    try:
+        server = create_server(
+            settings, make_repo(settings), load_project_config(settings.config_file)
+        )
+    except McpNotInstalled as exc:
+        raise ValueError(str(exc)) from exc
+    server.run(transport="stdio")
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.telegram.watch import run_watch
+
+    repo = make_repo(settings)
+    project = load_project_config(settings.config_file)
+
+    async def run(client: Any) -> None:
+        await run_watch(settings, repo, client, project)
+
+    asyncio.run(_with_client(settings, run, updates=True))
+    return 0
+
+
+def cmd_alert(args: argparse.Namespace, settings: Settings) -> int:
+    from gorets.alert import alert_text, send_alert
+
+    repo = None
+    try:
+        repo = make_repo(settings)
+    except Exception:
+        repo = None
+    text = alert_text(args.unit, repo)
+    if not settings.owner:
+        log.error("GORETS_OWNER не задан, оповещение некому: %s", text)
+        return 1
+    asyncio.run(_with_client(settings, lambda c: send_alert(c, settings.owner or "", text)))
+    print("Оповещение отправлено")
+    return 0
+
+
 def cmd_forget_author(args: argparse.Namespace, settings: Settings) -> int:
     if not settings.author_hmac_secret:
         raise ValueError("Не задан GORETS_AUTHOR_HMAC_SECRET")
@@ -301,6 +422,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-send", action="store_true", help="собрать отчёт, но не отправлять")
     p.add_argument("--resend", action="store_true", help="отправить уже собранный отчёт ещё раз")
     p.set_defaults(func=cmd_digest)
+
+    p = sub.add_parser("extract", help="прогнать извлекатели из gorets.toml по новым сообщениям")
+    p.add_argument("--extractor", action="append", help="только этот извлекатель (можно несколько)")
+    p.add_argument("--since", help="не старше даты ГГГГ-ММ-ДД")
+    p.add_argument("--limit", type=int, help="не больше N сообщений на извлекатель за запуск")
+    p.add_argument("--dry-run", action="store_true", help="сколько сообщений ждёт и оценка цены")
+    p.set_defaults(func=cmd_extract)
+
+    p = sub.add_parser("api", help="HTTP API для других проектов (только чтение, по токену)")
+    p.add_argument("--host")
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_api)
+
+    p = sub.add_parser("mcp", help="MCP-сервер (stdio) для агентов; нужен `uv sync --extra mcp`")
+    p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("watch", help="слушать чаты в реальном времени и слать вебхуки фидов")
+    p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("alert", help="сообщить владельцу о сбое службы (systemd OnFailure)")
+    p.add_argument("unit", help="имя unit-а systemd")
+    p.set_defaults(func=cmd_alert)
 
     p = sub.add_parser("forget-author", help="удалить всё написанное автором (по id Telegram)")
     p.add_argument("tg_user_id", type=int)

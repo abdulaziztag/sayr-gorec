@@ -1,0 +1,38 @@
+# HTTP API sayr-gorets для других проектов на этом же VPS (только чтение, по токену).
+#
+# Установка (от root):
+#   cp deploy/sayr-gorets-api.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now sayr-gorets-api.service
+# Проверка:
+#   curl -s http://127.0.0.1:8765/health
+#   curl -s -H "Authorization: Bearer $GORETS_API_TOKEN" http://127.0.0.1:8765/feeds
+#   journalctl -u sayr-gorets-api.service -n 50
+# Адрес и порт — GORETS_API_HOST / GORETS_API_PORT в .env (по умолчанию 127.0.0.1:8765).
+
+[Unit]
+Description=Sayr: HTTP API сборщика форума «ГОРЕЦ»
+Documentation=https://github.com/abdulaziztag/sayr-gorec
+After=network-online.target postgresql.service
+Wants=network-online.target
+OnFailure=sayr-gorets-alert@%n.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/Projects/sayr-gorets
+ExecStart=/root/Projects/sayr-gorets/.venv/bin/gorets api
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

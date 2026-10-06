@@ -15,6 +15,7 @@ from gorets.storage import Repository
 from tests.test_storage_pg import CHAT, SECRET, _row
 
 TEST_DB_URL = os.environ.get("GORETS_TEST_DATABASE_URL")
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, repo: Repository) -> Pa
     env_file.write_text(
         f"GORETS_DATABASE_URL={TEST_DB_URL}\nGORETS_AUTHOR_HMAC_SECRET={SECRET}\n"
         f"GORETS_REPORTS_DIR={tmp_path / 'reports'}\nGORETS_OWNER=@owner\n"
+        f"GORETS_CONFIG={ROOT / 'gorets.toml'}\n"
     )
     # Чтобы настоящие переменные окружения не перебили тестовый .env.
     for key in list(os.environ):
@@ -89,6 +91,15 @@ def test_collect_without_session_fails_cleanly(env: Path, capsys) -> None:
     assert cli.main(["--env-file", str(env), "collect"]) == 1
 
 
+def test_extract_dry_run_cli(env: Path, repo: Repository, capsys) -> None:
+    repo.upsert_chat(CHAT, username="gorets_uzb", title="ГОРЕЦ", is_forum=True)
+    repo.upsert_messages([_row(1, text="Тур", topic_id=500, topic_title="АФИША ПОХОДОВ")])
+    assert cli.main(["--env-file", str(env), "extract", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "afisha_tour (afisha): кандидатов 1" in out
+    assert repo.recent_runs()[0].kind == "extract"
+
+
 def test_parser_has_all_commands() -> None:
     parser = cli.build_parser()
     commands = parser._subparsers._group_actions[0].choices
@@ -98,6 +109,11 @@ def test_parser_has_all_commands() -> None:
         "backfill",
         "import-export",
         "digest",
+        "extract",
+        "api",
+        "watch",
+        "alert",
+        "mcp",
         "forget-author",
         "forget-message",
         "stats",

@@ -237,3 +237,16 @@ def test_mention_name_entity_is_masked() -> None:
     assert mask_mention_names(text, entities) == f"🙂 {USER}, идёшь?"
     row = convert(make_message(message=text, entities=entities))
     assert row["text"] == f"🙂 {USER}, идёшь?"
+
+
+def test_commercial_topic_keeps_contacts() -> None:
+    text = "Тур на Бельдерсай, запись +998 90 123 45 67, @organizer, org@mail.uz"
+    msg = make_message(
+        message=text, reply_to=tl.MessageReplyHeader(reply_to_msg_id=500, forum_topic=True)
+    )
+    masked = convert(msg)
+    assert "998" not in masked["text"] and USER in masked["text"]
+    kept = convert(msg, keep_contacts=lambda topic_id, title: title == "Выходы и сборы")
+    assert kept["text"] == text
+    other = convert(msg, keep_contacts=lambda topic_id, title: False)
+    assert other["text"] == masked["text"]

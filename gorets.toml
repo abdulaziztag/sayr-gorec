@@ -1,0 +1,222 @@
+# Фиды и извлекатели sayr-gorets (путь к файлу — GORETS_CONFIG, по умолчанию gorets.toml).
+# Файл хранится в репозитории: правки — коммитом, на сервер приедут с update.sh.
+#
+# Фид — чат плюс ветки. В topics — начала названий веток (регистр не важен,
+# длинные названия можно обрезать) или числовые id. Пустой topics — весь чат.
+# keep_contacts = true — телефоны и ники в этих ветках не стираются: это
+# коммерческие предложения, а не личная переписка.
+
+# --- «ГОРЕЦ» ФОРУМ, @gorets_uzb -------------------------------------------
+
+[feeds.afisha]
+chat = "gorets_uzb"
+topics = ["АФИША ПОХОДОВ"]
+description = "Афиши походов и туров"
+keep_contacts = true
+
+[feeds.companions]
+chat = "gorets_uzb"
+topics = ["ПОИСК ПОПУТЧИКОВ"]
+description = "Поиск попутчиков"
+
+[feeds.dispatch]
+chat = "gorets_uzb"
+topics = ["ДИСПЕТЧЕРСКАЯ"]
+description = "Диспетчерская: кто куда ушёл, состояние на месте"
+
+[feeds.routes]
+chat = "gorets_uzb"
+topics = ["Описания и нюансы популярных марш"]
+description = "Описания и нюансы популярных маршрутов"
+
+[feeds.weather]
+chat = "gorets_uzb"
+topics = ["ПРОГНОЗ ПОГОДЫ"]
+description = "Прогноз погоды"
+
+[feeds.chat]
+chat = "gorets_uzb"
+topics = ["ЧАТ"]
+description = "Общий чат форума"
+
+# --- Горняшка.uz, @hikinguz ------------------------------------------------
+
+[feeds.companions_hikinguz]
+chat = "hikinguz"
+topics = ["Кто куда"]
+description = "Кто куда? (поиск попутчиков)"
+
+[feeds.dispatch_hikinguz]
+chat = "hikinguz"
+topics = ["Диспетчерская"]
+description = "Диспетчерская: кто куда ушёл и когда вернулся"
+
+[feeds.reports_hikinguz]
+chat = "hikinguz"
+topics = ["Блоги и отчёты о походах"]
+description = "Отчёты о походах"
+
+[feeds.tracks_hikinguz]
+chat = "hikinguz"
+topics = ["Файло и трекохранилище"]
+description = "Треки и файлы маршрутов"
+
+# --- Извлекатели -------------------------------------------------------------
+# Инструкция и JSON-схема прогоняются по каждому новому сообщению фидов
+# (Message Batches, вдвое дешевле). Результат хранится бессрочно и отдаётся
+# через API: GET /extractions/<имя>. Модель сама решает, относится ли
+# сообщение к теме (relevant = false — пропуск).
+
+[extractors.afisha_tour]
+feeds = ["afisha"]
+description = "Тур или выход из афиши"
+link_places = ["place"]        # → data.place_slug из каталога Sayr
+# model = "claude-haiku-4-5-20251001"   # по умолчанию GORETS_EXTRACT_MODEL
+prompt = """
+Сообщение из ветки афиш туристического форума Узбекистана. Если это объявление
+о походе, туре, выезде или сборе — извлеки его по схеме. Если это вопрос,
+обсуждение или отчёт о прошедшем, а не объявление, — relevant = false.
+Даты — в формате ГГГГ-ММ-ДД, если год не указан, считай ближайший будущий.
+Цену — числом в сумах, валюту — как написано. Организатора, телефон и ссылку
+бери как написано: это контакты предложения.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "title":        {"type": "string"},
+    "organizer":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "contact":      {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "place":        {"type": "string"},
+    "region":       {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_start":   {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_end":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "days":         {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "price":        {"anyOf": [{"type": "number"}, {"type": "null"}]},
+    "currency":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "difficulty":   {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "includes":     {"type": "array", "items": {"type": "string"}},
+    "transport":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "summary":      {"type": "string"}
+  },
+  "required": ["title", "organizer", "contact", "place", "region", "date_start", "date_end",
+               "days", "price", "currency", "difficulty", "includes", "transport", "summary"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.companion_request]
+feeds = ["companions", "companions_hikinguz"]
+description = "Объявление о поиске попутчиков"
+link_places = ["place"]
+prompt = """
+Сообщение из ветки поиска попутчиков. Если кто-то ищет компанию в конкретный
+поход или предлагает присоединиться — извлеки по схеме. Ответы, уточнения и
+обсуждения без собственного плана — relevant = false. Даты в формате
+ГГГГ-ММ-ДД, если год не указан — ближайший будущий. Контактов в тексте нет
+(они заменены заглушками) — не выдумывай.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "place":       {"type": "string"},
+    "date_start":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "date_end":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "group_size":  {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+    "has_car":     {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
+    "difficulty":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "summary":     {"type": "string"}
+  },
+  "required": ["place", "date_start", "date_end", "group_size", "has_car", "difficulty", "summary"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.trail_condition]
+feeds = ["dispatch", "dispatch_hikinguz", "chat", "reports_hikinguz"]
+description = "Состояние тропы, дороги, погоды в конкретном месте"
+link_places = ["place"]
+prompt = """
+Сообщение туристического форума. Если в нём есть сведения о текущем состоянии
+конкретного места — снег, лавины, вода и броды, дорога и подъезд, закрытия и
+пропуска, опасности, погода на месте — извлеки по схеме. Планы, вопросы и
+общие рассуждения без фактов с места — relevant = false. kind: snow, water,
+road, closure, danger, weather, other. observed_on — дата наблюдения, если
+понятна из текста, в формате ГГГГ-ММ-ДД, иначе null.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "place":       {"type": "string"},
+    "kind":        {"type": "string", "enum": ["snow", "water", "road", "closure", "danger", "weather", "other"]},
+    "text":        {"type": "string"},
+    "observed_on": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "severity":    {"type": "string", "enum": ["info", "caution", "danger"]}
+  },
+  "required": ["place", "kind", "text", "observed_on", "severity"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.place_mentions]
+feeds = ["chat", "routes", "reports_hikinguz", "dispatch", "dispatch_hikinguz"]
+description = "Какие места упоминаются в сообщении (для страницы места в Sayr)"
+link_places = ["places[].name"]   # → slug у каждого места
+prompt = """
+Сообщение туристического форума Узбекистана. Перечисли конкретные места
+(вершины, перевалы, озёра, ущелья, реки, маршруты, базы, сёла как точки
+маршрутов), о которых идёт речь. name — как принято называть место (одна
+форма), context — одной фразой, в каком качестве упомянуто (были там, идут,
+спрашивают, состояние). Если мест нет — relevant = false.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "places": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":    {"type": "string"},
+          "context": {"type": "string"}
+        },
+        "required": ["name", "context"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["places"],
+  "additionalProperties": false
+}
+'''
+
+[extractors.user_question]
+feeds = ["chat", "routes", "companions", "companions_hikinguz"]
+description = "Вопросы участников — бэклог того, чего не хватает в приложении"
+link_places = ["place"]
+prompt = """
+Сообщение туристического форума. Если участник задаёт вопрос (ищет
+информацию, совет, подтверждение), извлеки его по схеме; иначе
+relevant = false. theme — одна из тем: transport (как добраться, такси,
+дорога), route (маршрут, тропа, время, сложность), gear (снаряжение),
+weather (погода, сезон, снег), permits (пропуска, погранзона, запреты),
+water (вода, родники), stay (ночёвка, база, палатки), safety (безопасность,
+опасности, связь), companions (попутчики, группа), app (приложение Sayr,
+карты, треки, навигация), other. question — вопрос в пересказе одной фразой,
+place — место, о котором спрашивают, если есть.
+"""
+schema = '''
+{
+  "type": "object",
+  "properties": {
+    "theme":    {"type": "string", "enum": ["transport", "route", "gear", "weather", "permits", "water", "stay", "safety", "companions", "app", "other"]},
+    "question": {"type": "string"},
+    "place":    {"anyOf": [{"type": "string"}, {"type": "null"}]}
+  },
+  "required": ["theme", "question", "place"],
+  "additionalProperties": false
+}
+'''

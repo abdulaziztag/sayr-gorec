@@ -16,6 +16,7 @@ from telethon.helpers import add_surrogate, del_surrogate
 from telethon.tl import types as tl
 
 from gorets.cleaning import USER
+from gorets.fingerprint import text_fingerprint
 from gorets.storage import as_decimal_coord
 
 # В форуме сообщения без ветки лежат в «General» — у него всегда id 1.
@@ -204,8 +205,13 @@ def message_to_row(
     hasher: Hasher,
     cleaner: Cleaner,
     fwd_title: str | None = None,
+    keep_contacts: Callable[[int | None, str | None], bool] | None = None,
 ) -> dict[str, Any] | None:
-    """Строка для upsert или None, если сообщение не храним (служебное, от бота, пустое)."""
+    """Строка для upsert или None, если сообщение не храним (служебное, от бота, пустое).
+
+    `keep_contacts(topic_id, topic_title)` → True для коммерческих веток:
+    там текст сохраняется как есть, без замены телефонов и ников.
+    """
     if not isinstance(msg, tl.Message) or getattr(msg, "action", None) is not None:
         return None
     if isinstance(sender, tl.User) and sender.bot:
@@ -222,10 +228,15 @@ def message_to_row(
             topic_title = GENERAL_TOPIC_TITLE
 
     media = classify_media(msg.media)
-    raw_text = mask_mention_names(msg.message or "", msg.entities)
-    text = cleaner(raw_text)
+    if keep_contacts is not None and keep_contacts(topic_id, topic_title):
+        clean: Cleaner = lambda value: (value or "").strip()  # noqa: E731
+        raw_text = msg.message or ""
+    else:
+        clean = cleaner
+        raw_text = mask_mention_names(msg.message or "", msg.entities)
+    text = clean(raw_text)
     if media.extra_text:
-        text = f"{text}\n{cleaner(media.extra_text)}".strip()
+        text = f"{text}\n{clean(media.extra_text)}".strip()
 
     return {
         "chat_id": chat.chat_id,
@@ -242,4 +253,5 @@ def message_to_row(
         "lng": as_decimal_coord(media.lng),
         "forwarded_from": forwarded_channel_title(msg, fwd_title),
         "edited_at": _as_utc(msg.edit_date),
+        "fingerprint": text_fingerprint(text),
     }

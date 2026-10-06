@@ -161,3 +161,20 @@ def test_backfill_and_collect_do_not_duplicate(repo: Repository) -> None:
     report = asyncio.run(run_backfill(settings(), repo, client, since=since))
     assert report.chats[0]["new"] == 0
     assert repo.count_messages(CHAT_ID) == 2
+
+
+def test_collect_keeps_contacts_in_feed_with_keep_contacts(repo: Repository, tmp_path) -> None:
+    config = tmp_path / "gorets.toml"
+    config.write_text(
+        '[feeds.afisha]\nchat = "gorets_uzb"\ntopics = ["Афиши"]\nkeep_contacts = true\n'
+    )
+    client = FakeTelegramClient(
+        [msg(1, "Звоните +998901234567"), msg(2, "Тур, звоните +998901234567", topic=500)],
+        topics={500: "Афиши"},
+    )
+    asyncio.run(run_collect(settings(config_file=config), repo, client))
+    with repo.session() as s:
+        from gorets.models import Message
+
+        assert "998" not in s.get(Message, (CHAT_ID, 1)).text
+        assert "+998901234567" in s.get(Message, (CHAT_ID, 2)).text

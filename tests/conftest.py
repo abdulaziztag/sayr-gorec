@@ -44,5 +44,10 @@ def pg_engine():
 @pytest.fixture
 def repo(pg_engine) -> Repository:
     with pg_engine.begin() as conn:
-        conn.execute(text("TRUNCATE messages, chats, sync_state, runs, digests RESTART IDENTITY"))
+        conn.execute(
+            text(
+                "TRUNCATE messages, chats, sync_state, runs, digests, "
+                "extractions, extract_batches RESTART IDENTITY"
+            )
+        )
     return Repository(pg_engine)
