@@ -88,7 +88,8 @@ def build_request(
         params["output_config"] = {
             "format": {"type": "json_schema", "schema": wrapped_schema(extractor.schema)}
         }
-    return {"custom_id": f"{m.chat_id}:{m.msg_id}", "params": params}
+    # Разрешены только буквы, цифры, «_» и «-»; двоеточие API не принимает.
+    return {"custom_id": f"{m.chat_id}_{m.msg_id}", "params": params}
 
 
 def item_meta(m: Message) -> dict[str, Any]:

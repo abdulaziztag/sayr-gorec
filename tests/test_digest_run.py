@@ -375,3 +375,13 @@ def test_rebuild_of_done_week_reuses_chunk_results(tmp_path: Path) -> None:
                 settings, make_deps(FakeRepo([]), gateway), week=parse_week("2026-W41", TZ)
             )
         )
+
+
+def test_chunk_ids_are_api_safe(tmp_path: Path) -> None:
+    import re
+
+    repo = FakeRepo([row(i, "текст " * 50, day=i % 7, topic=i % 3 + 1) for i in range(1, 20)])
+    gateway = FakeGateway()
+    asyncio.run(run_digest(make_settings(tmp_path), make_deps(repo, gateway), week=WEEK))
+    for request in gateway.submitted[0]:
+        assert re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", request["custom_id"]), request["custom_id"]

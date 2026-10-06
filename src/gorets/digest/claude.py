@@ -109,14 +109,23 @@ class AnthropicGateway:
         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
         from anthropic.types.messages.batch_create_params import Request
 
-        batch = self.client.messages.batches.create(
-            requests=[
-                Request(
-                    custom_id=r["custom_id"], params=MessageCreateParamsNonStreaming(**r["params"])
-                )
-                for r in requests
-            ]
-        )
+        a = self._anthropic
+        try:
+            batch = self.client.messages.batches.create(
+                requests=[
+                    Request(
+                        custom_id=r["custom_id"],
+                        params=MessageCreateParamsNonStreaming(**r["params"]),
+                    )
+                    for r in requests
+                ]
+            )
+        except a.APIStatusError as exc:
+            raise ClaudeError(
+                f"Батч не принят API Claude ({exc.status_code}): {exc.message}"
+            ) from exc
+        except a.APIConnectionError as exc:
+            raise ClaudeError(f"Нет связи с API Claude: {exc}") from exc
         return batch.id
 
     def batch_status(self, batch_id: str) -> BatchStatus:

@@ -410,3 +410,13 @@ def test_mcp_tools(repo: Repository) -> None:
         tools["feed_messages"]("nope")
     server = create_server(settings(), repo, PROJECT)
     assert server.name == "sayr-gorets"
+
+
+def test_custom_ids_are_api_safe(repo: Repository) -> None:
+    import re
+
+    seed(repo)
+    gateway = ExtractGateway()
+    run(repo, gateway, names=["afisha_tour"])
+    for request in gateway.submitted[0]:
+        assert re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", request["custom_id"]), request["custom_id"]
