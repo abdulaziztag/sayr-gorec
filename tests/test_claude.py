@@ -58,3 +58,23 @@ def test_extract_json_tolerates_fences_and_prose() -> None:
         extract_json("ничего")
     with pytest.raises(ClaudeError):
         extract_json("[1, 2]")
+
+
+def test_batch_error_detail_reads_nested_error() -> None:
+    from types import SimpleNamespace
+
+    from gorets.digest.claude import _error_detail
+
+    nested = SimpleNamespace(
+        type="errored",
+        error=SimpleNamespace(
+            type="error",
+            error=SimpleNamespace(type="billing_error", message="credit balance is too low"),
+        ),
+    )
+    assert _error_detail(nested) == "credit balance is too low"
+    flat = SimpleNamespace(
+        type="errored", error={"type": "invalid_request_error", "message": "bad"}
+    )
+    assert _error_detail(flat) == "bad"
+    assert _error_detail(SimpleNamespace(type="expired", error=None)) == "без подробностей"
