@@ -25,7 +25,8 @@ Claude по заданным схемам. Наружу отдаёт:
 
 ## Подключение
 
-- Адрес: `http://127.0.0.1:8790` (только с этого же сервера).
+- Адрес: `http://127.0.0.1:8790` с этого же сервера или
+  `https://gorets.sayr.info` снаружи (после установки `deploy/nginx-gorets.conf`).
 - Токен: `GORETS_API_TOKEN` из `/root/Projects/sayr-gorets/.env`.
   Заголовок `Authorization: Bearer <токен>` или `X-API-Token: <токен>`.
 - `GET /health` без токена: `{"ok": true, "collect_fresh": true, "runs": {...}}`.

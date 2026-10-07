@@ -473,7 +473,11 @@ Batches API одним запросом, модель решает, по тем�
 
 **HTTP API** — FastAPI, только чтение, слушает `127.0.0.1:8790`, токен
 `GORETS_API_TOKEN` в заголовке `Authorization: Bearer …` или
-`X-API-Token`. Служба `deploy/sayr-gorets-api.service`.
+`X-API-Token`. Служба `deploy/sayr-gorets-api.service`. Снаружи сервера
+API доступен через nginx с HTTPS: конфиг и шаги установки с certbot — в
+шапке `deploy/nginx-gorets.conf` (домен `gorets.sayr.info`); для разовых
+проверок с ноутбука достаточно туннеля
+`ssh -L 8790:127.0.0.1:8790 root@<vps>`.
 
 | Запрос | Что отдаёт |
 |---|---|
