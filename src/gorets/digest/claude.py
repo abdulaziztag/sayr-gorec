@@ -94,6 +94,27 @@ def _text_of(message: Any) -> str:
     )
 
 
+def _error_detail(result: Any) -> str:
+    """Текст ошибки батча: у API он вложен (error.error.message), читаем все уровни."""
+    node = getattr(result, "error", None)
+    parts: list[str] = []
+    for _ in range(4):
+        if node is None:
+            break
+        if isinstance(node, dict):
+            message, kind, nested = node.get("message"), node.get("type"), node.get("error")
+        else:
+            message = getattr(node, "message", None)
+            kind = getattr(node, "type", None)
+            nested = getattr(node, "error", None)
+        if message:
+            parts.append(str(message))
+        elif kind and kind not in ("error", "errored"):
+            parts.append(str(kind))
+        node = nested
+    return "; ".join(dict.fromkeys(parts)) or "без подробностей"
+
+
 class AnthropicGateway:
     """Настоящий клиент. Создаётся только когда есть ключ."""
 
@@ -163,9 +184,11 @@ class AnthropicGateway:
                     )
                 )
             else:
-                error = getattr(result, "error", None)
-                detail = getattr(error, "message", None) or getattr(error, "type", None) or ""
-                items.append(BatchItem(entry.custom_id, False, error=f"{result.type}: {detail}"))
+                items.append(
+                    BatchItem(
+                        entry.custom_id, False, error=f"{result.type}: {_error_detail(result)}"
+                    )
+                )
         return items
 
     def complete(self, params: dict[str, Any]) -> Completion:
