@@ -25,14 +25,22 @@ from gorets.storage import Repository
 log = logging.getLogger(__name__)
 
 EXTRACT_SYSTEM = """\
-Ты извлекаешь структурированные данные из одного сообщения Telegram-форума \
-туристов Узбекистана. Ниже — инструкция для этого вида извлечения. Ответ — \
-JSON по схеме: relevant = true и заполненный data, если сообщение по теме; \
-relevant = false и data = null, если нет. Не выдумывай: чего нет в тексте, \
-то null или пустой список. Язык полей — русский, как в сообщении.
+Ты извлекаешь структурированные данные из сообщений Telegram-форума туристов \
+Узбекистана. На входе несколько сообщений, каждое начинается строкой \
+«### <msg_id>». Ответ — JSON по схеме: в items ровно по одному элементу на \
+каждое сообщение, с его msg_id; relevant = true и заполненный data, если \
+сообщение по теме инструкции; relevant = false и data = null, если нет. \
+Сообщения независимы: не переноси факты из одного в другое. Не выдумывай: \
+чего нет в тексте, то null или пустой список. Язык полей — русский, как в \
+сообщении.
 
 Инструкция:
 """
+
+# Сколько сообщений кладём в один запрос: инструкция оплачивается один раз
+# на группу, а не на каждое сообщение, — это основная статья расходов.
+GROUP_SIZE = 20
+GROUP_CHARS = 12000
 
 
 class ExtractError(RuntimeError):
@@ -50,46 +58,79 @@ def wrapped_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "relevant": {"type": "boolean"},
-            "data": {"anyOf": [schema, {"type": "null"}]},
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "msg_id": {"type": "integer"},
+                        "relevant": {"type": "boolean"},
+                        "data": {"anyOf": [schema, {"type": "null"}]},
+                    },
+                    "required": ["msg_id", "relevant", "data"],
+                    "additionalProperties": False,
+                },
+            }
         },
-        "required": ["relevant", "data"],
+        "required": ["items"],
         "additionalProperties": False,
     }
 
 
 def message_prompt(m: Message, tz: ZoneInfo) -> str:
-    header = [f"Дата: {m.date.astimezone(tz).strftime('%Y-%m-%d %H:%M')}"]
+    header = [f"### {m.msg_id}", f"Дата: {m.date.astimezone(tz).strftime('%Y-%m-%d %H:%M')}"]
     if m.topic_title:
         header.append(f"Ветка: {m.topic_title}")
     if m.media_type:
         header.append(f"Вложение: {m.media_type}" + (f" {m.file_name}" if m.file_name else ""))
     if m.forwarded_from:
         header.append(f"Переслано из: {m.forwarded_from}")
-    return "\n".join(header) + "\n\nСообщение:\n" + m.text
+    return "\n".join(header) + "\n" + m.text.strip()
+
+
+def group_messages(messages: list[Message]) -> list[list[Message]]:
+    """Нарезать сообщения на группы по числу и по объёму текста."""
+    groups: list[list[Message]] = []
+    current: list[Message] = []
+    chars = 0
+    for m in messages:
+        size = len(m.text) + 120
+        if current and (len(current) >= GROUP_SIZE or chars + size > GROUP_CHARS):
+            groups.append(current)
+            current, chars = [], 0
+        current.append(m)
+        chars += size
+    if current:
+        groups.append(current)
+    return groups
 
 
 def build_request(
-    extractor: ExtractorConfig, m: Message, *, settings: Settings, tz: ZoneInfo
+    extractor: ExtractorConfig,
+    group: list[Message],
+    *,
+    settings: Settings,
+    tz: ZoneInfo,
+    index: int,
 ) -> dict[str, Any]:
+    body = "\n\n".join(message_prompt(m, tz) for m in group)
     params: dict[str, Any] = {
         "model": extractor.model or settings.extract_model,
-        "max_tokens": extractor.max_tokens,
-        "system": [
+        "max_tokens": extractor.max_tokens * max(1, len(group) // 4),
+        "system": [{"type": "text", "text": EXTRACT_SYSTEM + extractor.prompt}],
+        "messages": [
             {
-                "type": "text",
-                "text": EXTRACT_SYSTEM + extractor.prompt,
-                "cache_control": {"type": "ephemeral"},
+                "role": "user",
+                "content": f"Сообщений: {len(group)}.\n\n{body}\n\nВерни items по каждому.",
             }
         ],
-        "messages": [{"role": "user", "content": message_prompt(m, tz)}],
     }
     if settings.structured_output:
         params["output_config"] = {
             "format": {"type": "json_schema", "schema": wrapped_schema(extractor.schema)}
         }
     # Разрешены только буквы, цифры, «_» и «-»; двоеточие API не принимает.
-    return {"custom_id": f"{m.chat_id}_{m.msg_id}", "params": params}
+    return {"custom_id": f"g{index}_{group[0].chat_id}_{group[0].msg_id}", "params": params}
 
 
 def item_meta(m: Message) -> dict[str, Any]:
@@ -102,46 +143,82 @@ def item_meta(m: Message) -> dict[str, Any]:
     }
 
 
+def _meta_list(info: Any) -> list[dict[str, Any]]:
+    # Старые батчи хранили одно сообщение на запрос, новые — список.
+    if isinstance(info, dict) and "messages" in info:
+        return list(info["messages"])
+    return [info] if isinstance(info, dict) else list(info)
+
+
 def results_to_rows(
     extractor: ExtractorConfig,
     items: list[BatchItem],
-    meta: dict[str, dict[str, Any]],
+    meta: dict[str, Any],
     *,
     model: str,
 ) -> tuple[list[dict[str, Any]], int, int]:
     rows: list[dict[str, Any]] = []
     tokens_in = tokens_out = 0
     for item in items:
-        info = meta.get(item.custom_id)
-        if info is None:
+        if item.custom_id not in meta:
             continue
-        base = {
-            "extractor": extractor.name,
-            "chat_id": int(info["chat_id"]),
-            "msg_id": int(info["msg_id"]),
-            "message_date": datetime.fromisoformat(info["date"]),
-            "topic_id": info.get("topic_id"),
-            "topic_title": info.get("topic_title"),
-            "model": model,
-            "input_tokens": item.usage.total_input if item.usage else 0,
-            "output_tokens": item.usage.output_tokens if item.usage else 0,
-        }
-        if item.usage:
-            tokens_in += item.usage.total_input
-            tokens_out += item.usage.output_tokens
+        messages = _meta_list(meta[item.custom_id])
+        if not messages:
+            continue
+        usage_in = item.usage.total_input if item.usage else 0
+        usage_out = item.usage.output_tokens if item.usage else 0
+        tokens_in += usage_in
+        tokens_out += usage_out
+        share_in, share_out = usage_in // len(messages), usage_out // len(messages)
+
+        answers: dict[int, dict[str, Any]] = {}
+        failure: str | None = None
         if not item.ok or not item.text:
-            rows.append({**base, "status": "error", "data": None, "error": item.error or "пусто"})
-            continue
-        try:
-            answer = extract_json(item.text)
-        except ClaudeError as exc:
-            rows.append({**base, "status": "error", "data": None, "error": str(exc)})
-            continue
-        data = answer.get("data")
-        if answer.get("relevant") and isinstance(data, dict):
-            rows.append({**base, "status": "ok", "data": data, "error": None})
+            failure = item.error or "пустой ответ"
         else:
-            rows.append({**base, "status": "skipped", "data": None, "error": None})
+            try:
+                parsed = extract_json(item.text)
+                raw_items = parsed.get("items")
+                if raw_items is None and "relevant" in parsed:
+                    # Ответ старого формата на одно сообщение.
+                    raw_items = [{**parsed, "msg_id": int(messages[0]["msg_id"])}]
+                for entry in raw_items or []:
+                    if isinstance(entry, dict) and isinstance(entry.get("msg_id"), int):
+                        answers[entry["msg_id"]] = entry
+            except ClaudeError as exc:
+                failure = str(exc)
+
+        for info in messages:
+            base = {
+                "extractor": extractor.name,
+                "chat_id": int(info["chat_id"]),
+                "msg_id": int(info["msg_id"]),
+                "message_date": datetime.fromisoformat(info["date"]),
+                "topic_id": info.get("topic_id"),
+                "topic_title": info.get("topic_title"),
+                "model": model,
+                "input_tokens": share_in,
+                "output_tokens": share_out,
+            }
+            if failure:
+                rows.append({**base, "status": "error", "data": None, "error": failure})
+                continue
+            answer = answers.get(int(info["msg_id"]))
+            if answer is None:
+                rows.append(
+                    {
+                        **base,
+                        "status": "error",
+                        "data": None,
+                        "error": "модель пропустила сообщение",
+                    }
+                )
+                continue
+            data = answer.get("data")
+            if answer.get("relevant") and isinstance(data, dict):
+                rows.append({**base, "status": "ok", "data": data, "error": None})
+            else:
+                rows.append({**base, "status": "skipped", "data": None, "error": None})
     return rows, tokens_in, tokens_out
 
 
@@ -292,15 +369,20 @@ def run_extract(
         entry["candidates"] = len(candidates)
         if notes:
             entry["note"] = "; ".join(notes)
+        groups = group_messages(candidates)
+        entry["requests"] = len(groups)
         if dry_run or not candidates:
             if candidates:
                 model = extractor.model or settings.extract_model
-                est_in = sum(len(m.text) / settings.chars_per_token + 600 for m in candidates)
+                system_tokens = len(EXTRACT_SYSTEM + extractor.prompt) / settings.chars_per_token
+                est_in = sum(
+                    (len(m.text) + 120) / settings.chars_per_token for m in candidates
+                ) + system_tokens * len(groups)
                 entry["estimate_usd"] = round(
                     cost_usd(
                         model,
                         input_tokens=int(est_in),
-                        output_tokens=300 * len(candidates),
+                        output_tokens=120 * len(candidates),
                         batch=True,
                     ),
                     4,
@@ -308,14 +390,21 @@ def run_extract(
             report.extractors.append(entry)
             continue
 
-        requests = [build_request(extractor, m, settings=settings, tz=tz) for m in candidates]
-        meta = {r["custom_id"]: item_meta(m) for r, m in zip(requests, candidates, strict=True)}
+        requests = [
+            build_request(extractor, group, settings=settings, tz=tz, index=i)
+            for i, group in enumerate(groups)
+        ]
+        meta = {
+            r["custom_id"]: {"messages": [item_meta(m) for m in group]}
+            for r, group in zip(requests, groups, strict=True)
+        }
         batch_id = gateway.submit_batch(requests)
         repo.add_extract_batch(extractor.name, batch_id, meta)
         log.info(
-            "Извлекатель %s: отправлен батч %s из %s сообщений",
+            "Извлекатель %s: отправлен батч %s — %s сообщений в %s запросах",
             extractor.name,
             batch_id,
+            len(candidates),
             len(requests),
         )
         result = _collect_batch(

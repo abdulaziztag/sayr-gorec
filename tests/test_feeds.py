@@ -28,7 +28,8 @@ def test_project_config_loads() -> None:
     assert config.extractors["trail_condition"].feeds[:2] == ("dispatch", "dispatch_hikinguz")
     assert config.keeps_contacts(1, "gorets_uzb", 500, "АФИША ПОХОДОВ")
     assert not config.keeps_contacts(1, "gorets_uzb", 1, "General")
-    assert not config.keeps_contacts(2, "hikinguz", 3, "Кто куда ? (поиск попутчиков)")
+    assert config.keeps_contacts(2, "hikinguz", 3, "Кто куда ? (поиск попутчиков)")
+    assert not config.keeps_contacts(1, "gorets_uzb", 3, "ЧАТ")
 
 
 def test_missing_file_is_empty_config(tmp_path: Path) -> None:

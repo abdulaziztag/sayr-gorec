@@ -60,85 +60,108 @@ class ExtractGateway:
         return BatchStatus(id=batch_id, status="ended" if self.ended else "in_progress")
 
     def batch_results(self, batch_id):
+        import re
+
         items = []
         for r in self.submitted[int(batch_id.split("_")[1]) - 1]:
-            text = r["params"]["messages"][0]["content"]
-            props = r["params"]["output_config"]["format"]["schema"]["properties"]["data"]
-            props = props["anyOf"][0]["properties"]
-            if "сколько" in text and "theme" not in props:
-                answer = {"relevant": False, "data": None}
-            elif "title" in props:
-                answer = {
-                    "relevant": True,
-                    "data": {
-                        "title": text.splitlines()[-1][:30],
-                        "organizer": None,
-                        "contact": None,
-                        "place": "гора Бельдерсай",
-                        "region": None,
-                        "date_start": "2026-10-12",
-                        "date_end": None,
-                        "days": 1,
-                        "price": 300000,
-                        "currency": "сум",
-                        "difficulty": None,
-                        "includes": [],
-                        "transport": None,
-                        "summary": "тур",
-                    },
-                }
-            elif "theme" in props:
-                if "сколько" not in text:
-                    answer = {"relevant": False, "data": None}
+            content = r["params"]["messages"][0]["content"]
+            schema = r["params"]["output_config"]["format"]["schema"]
+            props = schema["properties"]["items"]["items"]["properties"]["data"]["anyOf"][0]
+            props = props["properties"]
+            answers = []
+            for block in re.split(r"(?m)^### ", content)[1:]:
+                msg_id = int(block.split("\n", 1)[0])
+                text = block
+                if "сколько" in text and "theme" not in props:
+                    answers.append({"msg_id": msg_id, "relevant": False, "data": None})
+                elif "title" in props:
+                    answers.append(
+                        {
+                            "msg_id": msg_id,
+                            "relevant": True,
+                            "data": {
+                                "title": text.strip().splitlines()[-1][:30],
+                                "organizer": None,
+                                "contact": None,
+                                "place": "гора Бельдерсай",
+                                "region": None,
+                                "date_start": "2026-10-12",
+                                "date_end": None,
+                                "days": 1,
+                                "price": 300000,
+                                "currency": "сум",
+                                "difficulty": None,
+                                "includes": [],
+                                "transport": None,
+                                "summary": "тур",
+                            },
+                        }
+                    )
+                elif "theme" in props:
+                    if "сколько" not in text:
+                        answers.append({"msg_id": msg_id, "relevant": False, "data": None})
+                    else:
+                        answers.append(
+                            {
+                                "msg_id": msg_id,
+                                "relevant": True,
+                                "data": {
+                                    "theme": "route",
+                                    "question": "сколько идти",
+                                    "place": "Бельдерсай",
+                                },
+                            }
+                        )
+                elif "places" in props:
+                    answers.append(
+                        {
+                            "msg_id": msg_id,
+                            "relevant": True,
+                            "data": {
+                                "places": [
+                                    {"name": "Бельдерсай", "context": "идут"},
+                                    {"name": "Неизвестное место", "context": "?"},
+                                ]
+                            },
+                        }
+                    )
+                elif "kind" in props:
+                    answers.append(
+                        {
+                            "msg_id": msg_id,
+                            "relevant": True,
+                            "data": {
+                                "place": "Бельдерсай",
+                                "kind": "snow",
+                                "text": "снег",
+                                "observed_on": None,
+                                "severity": "caution",
+                            },
+                        }
+                    )
                 else:
-                    answer = {
-                        "relevant": True,
-                        "data": {
-                            "theme": "route",
-                            "question": "сколько идти",
-                            "place": "Бельдерсай",
-                        },
-                    }
-            elif "places" in props:
-                answer = {
-                    "relevant": True,
-                    "data": {
-                        "places": [
-                            {"name": "Бельдерсай", "context": "идут"},
-                            {"name": "Неизвестное место", "context": "?"},
-                        ]
-                    },
-                }
-            elif "kind" in props:
-                answer = {
-                    "relevant": True,
-                    "data": {
-                        "place": "Бельдерсай",
-                        "kind": "snow",
-                        "text": "снег",
-                        "observed_on": None,
-                        "severity": "caution",
-                    },
-                }
-            else:
-                answer = {
-                    "relevant": True,
-                    "data": {
-                        "place": "Чимган",
-                        "date_start": "2026-10-19",
-                        "date_end": None,
-                        "group_size": 3,
-                        "has_car": True,
-                        "difficulty": None,
-                        "summary": "ищу компанию",
-                    },
-                }
+                    answers.append(
+                        {
+                            "msg_id": msg_id,
+                            "relevant": True,
+                            "data": {
+                                "place": "Чимган",
+                                "date_start": "2026-10-19",
+                                "date_end": None,
+                                "group_size": 3,
+                                "has_car": True,
+                                "difficulty": None,
+                                "contact": None,
+                                "summary": "ищу компанию",
+                            },
+                        }
+                    )
             items.append(
                 BatchItem(
                     r["custom_id"],
                     True,
-                    text=json.dumps(answer, ensure_ascii=False),
-                    usage=Usage(input_tokens=500, output_tokens=80),
+                    text=json.dumps({"items": answers}, ensure_ascii=False),
+                    usage=Usage(input_tokens=500 * len(answers), output_tokens=80 * len(answers)),
                 )
             )
         return items
@@ -198,6 +221,8 @@ def test_run_extract_stores_results_and_skips_done(repo: Repository) -> None:
     expected = wrapped_schema(PROJECT.extractors["afisha_tour"].schema)
     assert request["output_config"]["format"]["schema"] == expected
     assert "Инструкция" in request["system"][0]["text"]
+    # Три сообщения ушли одним запросом, а не тремя.
+    assert len(gateway.submitted[0]) == 1 and entry["requests"] == 1
     ok = repo.list_extractions("afisha_tour")
     assert [e.msg_id for e in ok] == [2, 5]
     assert ok[0].data["price"] == 300000
@@ -420,3 +445,57 @@ def test_custom_ids_are_api_safe(repo: Repository) -> None:
     run(repo, gateway, names=["afisha_tour"])
     for request in gateway.submitted[0]:
         assert re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", request["custom_id"]), request["custom_id"]
+
+
+def test_grouping_and_missing_answers() -> None:
+    from types import SimpleNamespace
+
+    from gorets.extract import GROUP_SIZE, group_messages, results_to_rows
+    from gorets.feeds import load_project_config
+
+    def m(i, text="т"):
+        return SimpleNamespace(
+            chat_id=1,
+            msg_id=i,
+            text=text,
+            date=datetime(2026, 10, 1, tzinfo=UTC),
+            topic_id=None,
+            topic_title=None,
+            media_type=None,
+            file_name=None,
+            forwarded_from=None,
+        )
+
+    groups = group_messages([m(i) for i in range(1, 46)])
+    assert [len(g) for g in groups] == [GROUP_SIZE, GROUP_SIZE, 5]
+    big = group_messages([m(1, "x" * 7000), m(2, "y" * 7000), m(3)])
+    assert [len(g) for g in big] == [1, 2]
+
+    extractor = load_project_config(ROOT / "gorets.toml").extractors["afisha_tour"]
+    meta = {
+        "g0": {
+            "messages": [
+                {"chat_id": 1, "msg_id": 1, "date": "2026-10-01T00:00:00+00:00"},
+                {"chat_id": 1, "msg_id": 2, "date": "2026-10-01T00:00:00+00:00"},
+            ]
+        }
+    }
+    answer = {"items": [{"msg_id": 1, "relevant": False, "data": None}]}
+    rows, tin, _tout = results_to_rows(
+        extractor,
+        [BatchItem("g0", True, text=json.dumps(answer), usage=Usage(100, 10))],
+        meta,
+        model="m",
+    )
+    assert [(r["msg_id"], r["status"]) for r in rows] == [(1, "skipped"), (2, "error")]
+    assert rows[1]["error"] == "модель пропустила сообщение"
+    assert tin == 100 and rows[0]["input_tokens"] == 50
+    # Старый формат батча (одно сообщение без списка) тоже читается.
+    old_meta = {"1_5": {"chat_id": 1, "msg_id": 5, "date": "2026-10-01T00:00:00+00:00"}}
+    rows, _, _ = results_to_rows(
+        extractor,
+        [BatchItem("1_5", True, text=json.dumps({"relevant": False, "data": None}))],
+        old_meta,
+        model="m",
+    )
+    assert rows[0]["status"] == "skipped"

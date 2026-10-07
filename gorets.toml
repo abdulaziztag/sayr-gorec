@@ -18,6 +18,7 @@ keep_contacts = true
 chat = "gorets_uzb"
 topics = ["ПОИСК ПОПУТЧИКОВ"]
 description = "Поиск попутчиков"
+keep_contacts = true   # контакты нужны комнатам попутчиков Sayr
 
 [feeds.dispatch]
 chat = "gorets_uzb"
@@ -45,6 +46,7 @@ description = "Общий чат форума"
 chat = "hikinguz"
 topics = ["Кто куда"]
 description = "Кто куда? (поиск попутчиков)"
+keep_contacts = true
 
 [feeds.dispatch_hikinguz]
 chat = "hikinguz"
@@ -113,8 +115,8 @@ prompt = """
 Сообщение из ветки поиска попутчиков. Если кто-то ищет компанию в конкретный
 поход или предлагает присоединиться — извлеки по схеме. Ответы, уточнения и
 обсуждения без собственного плана — relevant = false. Даты в формате
-ГГГГ-ММ-ДД, если год не указан — ближайший будущий. Контактов в тексте нет
-(они заменены заглушками) — не выдумывай.
+ГГГГ-ММ-ДД, если год не указан — ближайший будущий. contact — телефон или
+ник для связи, если они есть в тексте; не выдумывай.
 """
 schema = '''
 {
@@ -126,9 +128,10 @@ schema = '''
     "group_size":  {"anyOf": [{"type": "integer"}, {"type": "null"}]},
     "has_car":     {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
     "difficulty":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    "contact":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
     "summary":     {"type": "string"}
   },
-  "required": ["place", "date_start", "date_end", "group_size", "has_car", "difficulty", "summary"],
+  "required": ["place", "date_start", "date_end", "group_size", "has_car", "difficulty", "contact", "summary"],
   "additionalProperties": false
 }
 '''
